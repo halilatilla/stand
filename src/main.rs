@@ -57,8 +57,6 @@ struct Stand {
     warning_opening: bool,
     /// Click-to-type buffer for a minutes field. `None` while the label is showing.
     draft: Option<(MinutesField, String)>,
-    /// Values on the settings screen. The timer keeps the saved version until Use this.
-    pending: settings::Settings,
     last_second: Option<u64>,
     focus: FocusHandle,
 }
@@ -71,7 +69,6 @@ impl Stand {
             settings::Settings::default()
         });
         Self {
-            pending: loaded.clone(),
             session: Session::new(loaded, Instant::now()),
             settings_path,
             overlays: Vec::new(),
@@ -196,14 +193,31 @@ impl Stand {
         }
     }
 
+    fn schedule(&self) -> (u32, u32) {
+        let settings = self.session.settings();
+        (
+            settings.work_interval_minutes,
+            settings.lock_duration_minutes,
+        )
+    }
+
+    fn apply_minutes(&mut self, work: u32, lock: u32, cx: &mut Context<Self>) {
+        if self.session.is_break() {
+            return;
+        }
+        self.session.apply_schedule(work, lock, Instant::now());
+        self.remember_second(Instant::now());
+        self.persist(cx);
+    }
+
     fn adjust_work(&mut self, delta: i32, cx: &mut Context<Self>) {
         if self.session.is_break() {
             return;
         }
         self.draft = None;
-        let next = self.pending.work_interval_minutes as i32 + delta;
-        self.pending.set_work_interval_minutes(next.max(0) as u32);
-        cx.notify();
+        let (work, lock) = self.schedule();
+        let next = (work as i32 + delta).max(0) as u32;
+        self.apply_minutes(next, lock, cx);
     }
 
     fn adjust_lock(&mut self, delta: i32, cx: &mut Context<Self>) {
@@ -211,9 +225,9 @@ impl Stand {
             return;
         }
         self.draft = None;
-        let next = self.pending.lock_duration_minutes as i32 + delta;
-        self.pending.set_lock_duration_minutes(next.max(0) as u32);
-        cx.notify();
+        let (work, lock) = self.schedule();
+        let next = (lock as i32 + delta).max(0) as u32;
+        self.apply_minutes(work, next, cx);
     }
 
     fn set_work(&mut self, minutes: u32, cx: &mut Context<Self>) {
@@ -221,8 +235,8 @@ impl Stand {
             return;
         }
         self.draft = None;
-        self.pending.set_work_interval_minutes(minutes);
-        cx.notify();
+        let (_, lock) = self.schedule();
+        self.apply_minutes(minutes, lock, cx);
     }
 
     fn set_lock(&mut self, minutes: u32, cx: &mut Context<Self>) {
@@ -230,17 +244,18 @@ impl Stand {
             return;
         }
         self.draft = None;
-        self.pending.set_lock_duration_minutes(minutes);
-        cx.notify();
+        let (work, _) = self.schedule();
+        self.apply_minutes(work, minutes, cx);
     }
 
     fn begin_edit(&mut self, field: MinutesField, cx: &mut Context<Self>) {
         if self.session.is_break() {
             return;
         }
+        let (work, lock) = self.schedule();
         let current = match field {
-            MinutesField::Work => self.pending.work_interval_minutes,
-            MinutesField::Break => self.pending.lock_duration_minutes,
+            MinutesField::Work => work,
+            MinutesField::Break => lock,
         };
         self.draft = Some((field, current.to_string()));
         cx.notify();
@@ -282,28 +297,11 @@ impl Stand {
             return;
         };
         let minutes = text.parse::<u32>().unwrap_or(0);
+        let (work, lock) = self.schedule();
         match field {
-            MinutesField::Work => self.pending.set_work_interval_minutes(minutes),
-            MinutesField::Break => self.pending.set_lock_duration_minutes(minutes),
+            MinutesField::Work => self.apply_minutes(minutes, lock, cx),
+            MinutesField::Break => self.apply_minutes(work, minutes, cx),
         }
-        cx.notify();
-    }
-
-    fn use_version(&mut self, cx: &mut Context<Self>) {
-        if self.session.is_break() {
-            return;
-        }
-        if self.draft.is_some() {
-            self.commit_draft(cx);
-        }
-        self.session.apply_schedule(
-            self.pending.work_interval_minutes,
-            self.pending.lock_duration_minutes,
-            Instant::now(),
-        );
-        self.pending = self.session.settings().clone();
-        self.remember_second(Instant::now());
-        self.persist(cx);
     }
 
     fn persist(&mut self, cx: &mut Context<Self>) {
@@ -367,7 +365,7 @@ fn open_settings(cx: &mut App, stand: &Entity<Stand>) {
 
 fn settings_options(cx: &App) -> WindowOptions {
     WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(440.0), px(860.0)), cx)),
+        window_bounds: Some(WindowBounds::centered(size(px(420.0), px(600.0)), cx)),
         titlebar: Some(TitlebarOptions {
             title: Some("Stand".into()),
             appears_transparent: true,
@@ -375,7 +373,7 @@ fn settings_options(cx: &App) -> WindowOptions {
         }),
         focus: true,
         is_resizable: true,
-        window_min_size: Some(size(px(400.0), px(820.0))),
+        window_min_size: Some(size(px(380.0), px(560.0))),
         app_id: Some("stand".into()),
         ..Default::default()
     }
@@ -421,27 +419,24 @@ fn open_warning(cx: &mut App, stand: &Entity<Stand>) {
 }
 
 fn warning_options(cx: &App) -> WindowOptions {
-    let window_size = size(px(420.0), px(132.0));
+    let window_size = size(px(360.0), px(84.0));
     let bounds = if let Some(display) = cx.primary_display() {
         let frame = display.bounds();
         let x = frame.origin.x + (frame.size.width - window_size.width) / 2.;
-        let y = frame.origin.y + px(48.0);
+        let y = frame.origin.y + px(36.0);
         WindowBounds::Windowed(Bounds::new(point(x, y), window_size))
     } else {
         WindowBounds::centered(window_size, cx)
     };
     WindowOptions {
         window_bounds: Some(bounds),
-        titlebar: Some(TitlebarOptions {
-            title: Some("Stand".into()),
-            appears_transparent: true,
-            traffic_light_position: Some(point(px(16.0), px(16.0))),
-        }),
+        titlebar: None,
         focus: false,
         show: true,
-        kind: WindowKind::Normal,
+        kind: WindowKind::PopUp,
         is_resizable: false,
         is_minimizable: false,
+        is_movable: true,
         app_id: Some("stand".into()),
         ..Default::default()
     }
@@ -463,8 +458,7 @@ impl Render for Warning {
             .bg(rgb(INK))
             .text_color(rgb(PAPER))
             .px(px(22.0))
-            .pt(px(18.0))
-            .gap(px(6.0))
+            .gap(px(4.0))
             .child(
                 div()
                     .text_size(px(22.0))
@@ -567,12 +561,7 @@ impl Render for Stand {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let in_break = self.session.is_break();
         let remaining = format_remaining(self.session.remaining(Instant::now()));
-        let work_minutes = self.pending.work_interval_minutes;
-        let lock_minutes = self.pending.lock_duration_minutes;
-        let live = self.session.settings();
-        let in_use = self.draft.is_none()
-            && work_minutes == live.work_interval_minutes
-            && lock_minutes == live.lock_duration_minutes;
+        let (work_minutes, lock_minutes) = self.schedule();
 
         let mut root = div()
             .id("stand-root")
@@ -633,7 +622,6 @@ impl Render for Stand {
                 work_editing,
                 lock_shown,
                 lock_editing,
-                in_use,
                 &remaining,
                 cx,
             ));
@@ -649,7 +637,6 @@ fn settings_body(
     work_editing: bool,
     lock_shown: String,
     lock_editing: bool,
-    in_use: bool,
     remaining: &str,
     cx: &mut Context<Stand>,
 ) -> impl IntoElement {
@@ -657,10 +644,10 @@ fn settings_body(
         .flex()
         .flex_col()
         .flex_1()
-        .pt(px(52.0))
+        .pt(px(48.0))
         .px(px(28.0))
-        .pb(px(28.0))
-        .gap(px(22.0))
+        .pb(px(24.0))
+        .gap(px(20.0))
         .child(
             div()
                 .flex()
@@ -676,23 +663,28 @@ fn settings_body(
                 )
                 .child(
                     div()
-                        .text_size(px(28.0))
-                        .font_weight(FontWeight::BOLD)
-                        .child("Stand"),
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(px(14.0))
+                                .text_color(rgb(MUTED))
+                                .child("Next break in"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(36.0))
+                                .font_weight(FontWeight::BOLD)
+                                .child(remaining.to_string()),
+                        ),
                 ),
         )
-        .child(
-            div()
-                .text_size(px(15.0))
-                .text_color(rgb(MUTED))
-                .child("Play with the minutes here. The timer keeps the current version until you use this one."),
-        )
         .child(duration_row(
-            "Work interval",
-            "How long you sit before the screen is taken.",
+            "Work",
+            "Before the screen is covered.",
             work_shown,
             work_editing,
-            "Click the number to type. Steps of 5. 1 to 180.",
             "work-dec",
             "work-value",
             "work-inc",
@@ -710,11 +702,10 @@ fn settings_body(
             |this, minutes, cx| this.set_work(minutes, cx),
         ))
         .child(duration_row(
-            "Break length",
-            "How long the screen stays covered.",
+            "Break",
+            "How long the cover stays.",
             lock_shown,
             lock_editing,
-            "Click the number to type. Steps of 5. 1 to 30.",
             "lock-dec",
             "lock-value",
             "lock-inc",
@@ -731,61 +722,21 @@ fn settings_body(
             cx,
             |this, minutes, cx| this.set_lock(minutes, cx),
         ))
-        .child(div().flex_1())
         .child(
             div()
+                .id("start-break")
+                .h(px(44.0))
                 .flex()
-                .flex_col()
-                .gap(px(14.0))
-                .child(
-                    div()
-                        .text_size(px(15.0))
-                        .text_color(rgb(MUTED))
-                        .child(format!("Next break in {remaining}")),
-                )
-                .child(
-                    div()
-                        .id("use-version")
-                        .h(px(48.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(10.0))
-                        .bg(rgb(AMBER))
-                        .text_color(rgb(AMBER_INK))
-                        .font_weight(FontWeight::BOLD)
-                        .text_size(px(16.0))
-                        .cursor_pointer()
-                        .opacity(if in_use { 0.4 } else { 1.0 })
-                        .child(if in_use { "In use" } else { "Use this" })
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.use_version(cx))),
-                )
-                .child(
-                    div()
-                        .id("lock-now")
-                        .h(px(48.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(10.0))
-                        .bg(rgb(INK_RAISED))
-                        .text_color(rgb(PAPER))
-                        .font_weight(FontWeight::BOLD)
-                        .text_size(px(16.0))
-                        .cursor_pointer()
-                        .child("Lock now")
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.lock_now(cx))),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb(MUTED))
-                        .child(if cfg!(target_os = "macos") {
-                            "Closing this window leaves Stand in the menu bar. During a break it will not close."
-                        } else {
-                            "Closing this window quits Stand. During a break it will not close."
-                        }),
-                ),
+                .items_center()
+                .justify_center()
+                .rounded(px(10.0))
+                .bg(rgb(INK_RAISED))
+                .text_color(rgb(PAPER))
+                .font_weight(FontWeight::BOLD)
+                .text_size(px(16.0))
+                .cursor_pointer()
+                .child("Start break")
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.lock_now(cx))),
         )
 }
 
@@ -794,7 +745,6 @@ fn duration_row(
     hint: &'static str,
     value: String,
     editing: bool,
-    range: &'static str,
     dec_id: &'static str,
     value_id: &'static str,
     inc_id: &'static str,
@@ -837,12 +787,6 @@ fn duration_row(
                         .on_click(on_value),
                 )
                 .child(step_button(inc_id, "+5", can_inc, on_inc)),
-        )
-        .child(
-            div()
-                .text_size(px(12.0))
-                .text_color(rgb(MUTED))
-                .child(range),
         )
 }
 
@@ -985,9 +929,9 @@ fn break_copy(
         .child(
             div()
                 .id(end_id)
-                .mt(px(12.0))
-                .h(px(48.0))
-                .w(px(180.0))
+                .mt(px(4.0))
+                .h(px(40.0))
+                .px(px(22.0))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -995,10 +939,16 @@ fn break_copy(
                 .bg(rgb(INK_RAISED))
                 .text_color(rgb(PAPER))
                 .font_weight(FontWeight::BOLD)
-                .text_size(px(16.0))
+                .text_size(px(15.0))
                 .cursor_pointer()
                 .child("End break")
                 .on_click(on_end),
+        )
+        .child(
+            div()
+                .text_size(px(13.0))
+                .text_color(rgb(MUTED))
+                .child("Hold Escape for 3 seconds."),
         )
 }
 

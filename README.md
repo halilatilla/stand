@@ -13,7 +13,7 @@ Settings are written as JSON when you change them.
 - Linux: `$XDG_CONFIG_HOME/stand/settings.json`, or `~/.config/stand/settings.json`
 - `STAND_CONFIG_DIR` overrides that directory
 
-**Lock now** in the window, or **Start break** in the menu bar, starts a break without waiting out the work interval. Closing the settings window on a Mac leaves Stand running. Quit is in the menu bar.
+**Start break** in the window or the menu bar starts a break without waiting out the work interval. Closing the settings window on a Mac leaves Stand running. Quit is in the menu bar.
 
 ## Why this is not the macOS login lock
 
