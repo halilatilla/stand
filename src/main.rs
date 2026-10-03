@@ -27,9 +27,44 @@ const PAPER: u32 = 0xf3eee6;
 const MUTED: u32 = 0xa89b8c;
 const AMBER: u32 = 0xe39a4b;
 const AMBER_INK: u32 = 0x1a140e;
-/// Deep leaf green at about 91% opacity, so the desktop shows through faintly.
-const BREAK_VEIL: u32 = 0x163e2ce8;
-const LEAF: u32 = 0xb7e4c7;
+struct BreakScene {
+    veil: u32,
+    mark: u32,
+    glow: u32,
+    arms_up: bool,
+    line: &'static str,
+}
+
+const SCENES: &[BreakScene] = &[
+    BreakScene {
+        veil: 0x163e2ce8,
+        mark: 0xb7e4c7,
+        glow: 0x95d5b2,
+        arms_up: false,
+        line: "Go touch some grass. The real kind.",
+    },
+    BreakScene {
+        veil: 0x6a4a12e8,
+        mark: 0xf0d48a,
+        glow: 0xf0c14b,
+        arms_up: true,
+        line: "Your spine filed a complaint.",
+    },
+    BreakScene {
+        veil: 0x1a3d66e8,
+        mark: 0xc5dff0,
+        glow: 0x8ec4e8,
+        arms_up: false,
+        line: "Look at a cloud. Not a Slack thread.",
+    },
+    BreakScene {
+        veil: 0x241848e8,
+        mark: 0xd4c8f0,
+        glow: 0xa090e0,
+        arms_up: true,
+        line: "The chair is not your personality.",
+    },
+];
 
 struct StandKeepAlive(#[allow(dead_code)] Entity<Stand>);
 
@@ -57,8 +92,8 @@ struct Stand {
     warning_opening: bool,
     /// Click-to-type buffer for a minutes field. `None` while the label is showing.
     draft: Option<(MinutesField, String)>,
-    /// Instruction for the current break. Chosen once, when the break starts.
-    break_line: &'static str,
+    /// Scene for the current break. Chosen once, when the break starts.
+    scene: usize,
     prompt_index: usize,
     last_second: Option<u64>,
     focus: FocusHandle,
@@ -80,7 +115,7 @@ impl Stand {
             warning_dismissed: false,
             warning_opening: false,
             draft: None,
-            break_line: PROMPTS[0],
+            scene: 0,
             prompt_index: 0,
             last_second: None,
             focus: cx.focus_handle(),
@@ -202,8 +237,12 @@ impl Stand {
     }
 
     fn pin_break_line(&mut self) {
-        self.break_line = PROMPTS[self.prompt_index % PROMPTS.len()];
-        self.prompt_index = (self.prompt_index + 1) % PROMPTS.len();
+        self.scene = self.prompt_index % SCENES.len();
+        self.prompt_index = (self.prompt_index + 1) % SCENES.len();
+    }
+
+    fn break_scene_now(&self) -> &'static BreakScene {
+        &SCENES[self.scene]
     }
 
     fn schedule(&self) -> (u32, u32) {
@@ -324,13 +363,6 @@ impl Stand {
         cx.notify();
     }
 }
-
-const PROMPTS: &[&str] = &[
-    "Walk until this reaches zero.",
-    "Look at something far away.",
-    "Roll your shoulders.",
-    "Shake out your hands.",
-];
 
 fn open_settings(cx: &mut App, stand: &Entity<Stand>) {
     if let Some(existing) = stand.read(cx).settings_window {
@@ -603,18 +635,18 @@ impl Render for Stand {
             // The cover already shows the countdown.
             if self.overlays.is_empty() {
                 let left = format_remaining(self.session.remaining(Instant::now()));
-                let line = self.break_line;
+                let scene = self.break_scene_now();
                 root = root.child(
                     div()
                         .relative()
                         .flex()
                         .flex_1()
                         .size_full()
-                        .bg(rgba(BREAK_VEIL))
-                        .child(break_scene())
+                        .bg(rgba(scene.veil))
+                        .child(break_scene(scene))
                         .child(break_copy(
                             &left,
-                            line,
+                            scene,
                             true,
                             "end-break-window",
                             cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
@@ -914,7 +946,7 @@ fn step_button(
 
 fn break_copy(
     remaining: &str,
-    prompt: &str,
+    scene: &BreakScene,
     compact: bool,
     end_id: &'static str,
     on_end: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -928,7 +960,7 @@ fn break_copy(
         .items_center()
         .justify_center()
         .gap(px(16.0))
-        .child(div().w(px(48.0)).h(px(3.0)).bg(rgb(LEAF)))
+        .child(div().w(px(48.0)).h(px(3.0)).bg(rgb(scene.mark)))
         .child(
             div()
                 .text_size(title)
@@ -939,7 +971,7 @@ fn break_copy(
             div()
                 .text_size(px(18.0))
                 .text_color(rgb(MUTED))
-                .child(prompt.to_string()),
+                .child(scene.line),
         )
         .child(
             div()
@@ -974,7 +1006,8 @@ fn break_copy(
         )
 }
 
-fn break_scene() -> impl IntoElement {
+fn break_scene(scene: &BreakScene) -> impl IntoElement {
+    let glow = scene.glow << 8;
     div()
         .absolute()
         .inset_0()
@@ -987,8 +1020,8 @@ fn break_scene() -> impl IntoElement {
                 .h(px(420.0))
                 .bg(linear_gradient(
                     180.0,
-                    linear_color_stop(rgba(0x95d5b200), 0.0),
-                    linear_color_stop(rgba(0x95d5b255), 1.0),
+                    linear_color_stop(rgba(glow), 0.0),
+                    linear_color_stop(rgba(glow | 0x55), 1.0),
                 )),
         )
         .child(
@@ -1000,47 +1033,65 @@ fn break_scene() -> impl IntoElement {
                 .flex()
                 .flex_col()
                 .items_center()
-                .child(standing_mark())
+                .child(standing_mark(scene.mark, scene.arms_up))
                 .child(
                     div()
                         .mt(px(28.0))
                         .w(px(360.0))
                         .h(px(2.0))
                         .rounded(px(1.0))
-                        .bg(rgb(LEAF))
+                        .bg(rgb(scene.mark))
                         .opacity(0.85),
                 ),
         )
 }
 
-fn standing_mark() -> impl IntoElement {
+fn standing_mark(color: u32, arms_up: bool) -> impl IntoElement {
+    let head = div()
+        .w(px(52.0))
+        .h(px(52.0))
+        .rounded(px(26.0))
+        .bg(rgb(color));
+    let top = if arms_up {
+        div()
+            .flex()
+            .items_end()
+            .gap(px(10.0))
+            .child(raised_arm(color))
+            .child(head)
+            .child(raised_arm(color))
+    } else {
+        div().child(head)
+    };
     div()
         .flex()
         .flex_col()
         .items_center()
         .gap(px(8.0))
         .opacity(0.55)
-        .child(
-            div()
-                .w(px(52.0))
-                .h(px(52.0))
-                .rounded(px(26.0))
-                .bg(rgb(LEAF)),
-        )
+        .child(top)
         .child(
             div()
                 .w(px(124.0))
                 .h(px(96.0))
                 .rounded(px(32.0))
-                .bg(rgb(LEAF)),
+                .bg(rgb(color)),
         )
         .child(
             div()
                 .w(px(76.0))
                 .h(px(108.0))
                 .rounded(px(24.0))
-                .bg(rgb(LEAF)),
+                .bg(rgb(color)),
         )
+}
+
+fn raised_arm(color: u32) -> impl IntoElement {
+    div()
+        .w(px(16.0))
+        .h(px(72.0))
+        .rounded(px(8.0))
+        .bg(rgb(color))
 }
 
 struct Overlay {
@@ -1053,7 +1104,7 @@ impl Render for Overlay {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let remaining = self.stand.read(cx).session.remaining(Instant::now());
         let label = format_remaining(remaining);
-        let line = self.stand.read(cx).break_line;
+        let scene = self.stand.read(cx).break_scene_now();
         div()
             .id("break-surface")
             .track_focus(&self.focus)
@@ -1061,7 +1112,7 @@ impl Render for Overlay {
             .flex()
             .size_full()
             .overflow_hidden()
-            .bg(rgba(BREAK_VEIL))
+            .bg(rgba(scene.veil))
             .text_color(rgb(PAPER))
             .on_mouse_down(
                 MouseButton::Left,
@@ -1095,11 +1146,11 @@ impl Render for Overlay {
                     this.on_escape(false, cx);
                 }
             }))
-            .child(break_scene())
+            .child(break_scene(scene))
             .child(
                 div().flex().flex_1().pb(px(120.0)).child(break_copy(
                     &label,
-                    line,
+                    scene,
                     false,
                     "end-break",
                     cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
