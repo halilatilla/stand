@@ -51,6 +51,12 @@ const ANY_INPUT: u32 = u32::MAX;
 unsafe extern "C" {
     fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
     fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *mut objc::runtime::Object;
+    fn CGGetActiveDisplayList(
+        max_displays: u32,
+        active_displays: *mut u32,
+        display_count: *mut u32,
+    ) -> i32;
+    fn CGDisplayBounds(display: u32) -> CgRect;
 }
 
 #[cfg(target_os = "macos")]
@@ -100,7 +106,7 @@ fn windows_are_busy() -> bool {
         if list.is_null() {
             return false;
         }
-        let screens = display_sizes();
+        let screens = display_frames();
         let count: usize = msg_send![list, count];
         let mut busy = false;
         for index in 0..count {
@@ -129,7 +135,11 @@ fn meeting_window(owner: &str, name: &str) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn fills_display(window: *mut objc::runtime::Object, owner: &str, screens: &[(f64, f64)]) -> bool {
+fn fills_display(
+    window: *mut objc::runtime::Object,
+    owner: &str,
+    screens: &[(f64, f64, f64, f64)],
+) -> bool {
     if system_window(owner) {
         return false;
     }
@@ -137,11 +147,13 @@ fn fills_display(window: *mut objc::runtime::Object, owner: &str, screens: &[(f6
     if bounds.is_null() {
         return false;
     }
-    let width = number_at(bounds, "Width");
-    let height = number_at(bounds, "Height");
-    screens
-        .iter()
-        .any(|(screen_w, screen_h)| width + 24.0 >= *screen_w && height + 24.0 >= *screen_h)
+    let frame = (
+        number_at(bounds, "X"),
+        number_at(bounds, "Y"),
+        number_at(bounds, "Width"),
+        number_at(bounds, "Height"),
+    );
+    screens.iter().any(|screen| covers_display(frame, *screen))
 }
 
 #[cfg(target_os = "macos")]
@@ -163,41 +175,43 @@ fn system_window(owner: &str) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn display_sizes() -> Vec<(f64, f64)> {
-    use objc::{class, msg_send, sel, sel_impl};
-    unsafe {
-        let screens: *mut objc::runtime::Object = msg_send![class!(NSScreen), screens];
-        if screens.is_null() {
-            return Vec::new();
-        }
-        let count: usize = msg_send![screens, count];
-        let mut sizes = Vec::with_capacity(count);
-        for index in 0..count {
-            let screen: *mut objc::runtime::Object = msg_send![screens, objectAtIndex: index];
-            let frame: NsRect = msg_send![screen, frame];
-            sizes.push((frame.size.width, frame.size.height));
-        }
-        sizes
+fn display_frames() -> Vec<(f64, f64, f64, f64)> {
+    let mut ids = [0u32; 16];
+    let mut count = 0u32;
+    let err = unsafe { CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut count) };
+    if err != 0 {
+        return Vec::new();
     }
+    (0..count as usize)
+        .map(|index| {
+            let frame = unsafe { CGDisplayBounds(ids[index]) };
+            (
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+            )
+        })
+        .collect()
 }
 
 #[cfg(target_os = "macos")]
 #[repr(C)]
-struct NsRect {
-    origin: NsPoint,
-    size: NsSize,
+struct CgRect {
+    origin: CgPoint,
+    size: CgSize,
 }
 
 #[cfg(target_os = "macos")]
 #[repr(C)]
-struct NsPoint {
+struct CgPoint {
     x: f64,
     y: f64,
 }
 
 #[cfg(target_os = "macos")]
 #[repr(C)]
-struct NsSize {
+struct CgSize {
     width: f64,
     height: f64,
 }
@@ -237,6 +251,36 @@ fn ns_key(text: &str) -> *mut objc::runtime::Object {
     use objc::{class, msg_send, sel, sel_impl};
     let c = std::ffi::CString::new(text).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
     unsafe { msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()] }
+}
+
+fn covers_display(window: (f64, f64, f64, f64), screen: (f64, f64, f64, f64)) -> bool {
+    let (x, y, w, h) = window;
+    let (sx, sy, sw, sh) = screen;
+    let overlaps = x < sx + sw && x + w > sx && y < sy + sh && y + h > sy;
+    overlaps && w + 24.0 >= sw && h + 24.0 >= sh
+}
+
+#[cfg(test)]
+mod tests {
+    use super::covers_display;
+
+    const SMALL: (f64, f64, f64, f64) = (0.0, 0.0, 1728.0, 1117.0);
+    const LARGE: (f64, f64, f64, f64) = (-351.0, -1440.0, 2560.0, 1440.0);
+
+    #[test]
+    fn a_large_window_does_not_cover_the_smaller_display() {
+        let chrome = (-351.0, -1318.0, 2560.0, 1318.0);
+        assert!(!covers_display(chrome, SMALL));
+        assert!(!covers_display(chrome, LARGE));
+    }
+
+    #[test]
+    fn a_window_that_fills_its_own_display_holds_the_clock() {
+        assert!(covers_display((0.0, 0.0, 1728.0, 1117.0), SMALL));
+        assert!(covers_display((-351.0, -1440.0, 2560.0, 1440.0), LARGE));
+        assert!(covers_display((0.0, 0.0, 1704.0, 1093.0), SMALL));
+        assert!(!covers_display((0.0, 0.0, 1728.0, 1092.0), SMALL));
+    }
 }
 
 #[cfg(target_os = "macos")]
