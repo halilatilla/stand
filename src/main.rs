@@ -10,10 +10,10 @@ use std::sync::{Arc, OnceLock};
 
 use gpui::{
     App, Bounds, ClickEvent, Context, DisplayId, Entity, FocusHandle, FontWeight, Global, Image,
-    ImageFormat, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, Pixels, Size,
+    ImageFormat,     KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, Pixels, Size,
     Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowDecorations, WindowHandle, WindowKind, WindowOptions, div, img, point, prelude::*, px,
-    rgb, rgba, size,
+    WindowDecorations, WindowHandle, WindowKind, WindowOptions, div, img, linear_color_stop,
+    linear_gradient, point, prelude::*, px, rgb, rgba, size,
 };
 use gpui_platform::application;
 
@@ -28,8 +28,6 @@ const MUTED: u32 = 0xa89b8c;
 const AMBER: u32 = 0xe39a4b;
 const AMBER_INK: u32 = 0x1a140e;
 const BREAK_INK: u32 = 0x100e0c;
-/// Dark veil at about 35% opacity so the desktop stays visible.
-const BREAK_VEIL: u32 = 0x100e0c59;
 
 struct StandKeepAlive(#[allow(dead_code)] Entity<Stand>);
 
@@ -57,6 +55,9 @@ struct Stand {
     warning_opening: bool,
     /// Click-to-type buffer for a minutes field. `None` while the label is showing.
     draft: Option<(MinutesField, String)>,
+    /// Instruction for the current break. Chosen once, when the break starts.
+    break_line: &'static str,
+    prompt_index: usize,
     last_second: Option<u64>,
     focus: FocusHandle,
 }
@@ -77,6 +78,8 @@ impl Stand {
             warning_dismissed: false,
             warning_opening: false,
             draft: None,
+            break_line: PROMPTS[0],
+            prompt_index: 0,
             last_second: None,
             focus: cx.focus_handle(),
         }
@@ -118,6 +121,7 @@ impl Stand {
         menu_bar::set_title(&self.session.status_label(now));
         match effect {
             Effect::BeganBreak => {
+                self.pin_break_line();
                 let stand = cx.entity();
                 queue_open(cx, stand);
             }
@@ -165,6 +169,7 @@ impl Stand {
 
     fn lock_now(&mut self, cx: &mut Context<Self>) {
         if self.session.lock_now(Instant::now()) == Effect::BeganBreak {
+            self.pin_break_line();
             self.remember_second(Instant::now());
             let stand = cx.entity();
             queue_open(cx, stand);
@@ -191,6 +196,11 @@ impl Stand {
             let stand = cx.entity();
             queue_close(cx, stand);
         }
+    }
+
+    fn pin_break_line(&mut self) {
+        self.break_line = PROMPTS[self.prompt_index % PROMPTS.len()];
+        self.prompt_index = (self.prompt_index + 1) % PROMPTS.len();
     }
 
     fn schedule(&self) -> (u32, u32) {
@@ -318,11 +328,6 @@ const PROMPTS: &[&str] = &[
     "Roll your shoulders.",
     "Shake out your hands.",
 ];
-
-fn break_prompt(remaining: Duration) -> &'static str {
-    let index = (remaining.as_secs() / 15) as usize % PROMPTS.len();
-    PROMPTS[index]
-}
 
 fn open_settings(cx: &mut App, stand: &Entity<Stand>) {
     if let Some(existing) = stand.read(cx).settings_window {
@@ -595,14 +600,24 @@ impl Render for Stand {
             // The cover already shows the countdown. Drawing it here too
             // shows a second copy through the veil.
             if self.overlays.is_empty() {
-                let left = self.session.remaining(Instant::now());
-                root = root.child(break_copy(
-                    &format_remaining(left),
-                    break_prompt(left),
-                    true,
-                    "end-break-window",
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
-                ));
+                let left = format_remaining(self.session.remaining(Instant::now()));
+                let line = self.break_line;
+                root = root.child(
+                    div()
+                        .relative()
+                        .flex()
+                        .flex_1()
+                        .size_full()
+                        .bg(rgb(BREAK_INK))
+                        .child(break_scene())
+                        .child(break_copy(
+                            &left,
+                            line,
+                            true,
+                            "end-break-window",
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
+                        )),
+                );
             }
         } else {
             let (work_shown, work_editing) = field_label(
@@ -952,6 +967,76 @@ fn break_copy(
         )
 }
 
+/// Quiet standing mark and a warm pool of light. The words stay in front.
+fn break_scene() -> impl IntoElement {
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .h(px(420.0))
+                .bg(linear_gradient(
+                    180.0,
+                    linear_color_stop(rgba(0xe39a4b00), 0.0),
+                    linear_color_stop(rgba(0xe39a4b2a), 1.0),
+                )),
+        )
+        .child(
+            div()
+                .absolute()
+                .bottom(px(36.0))
+                .left_0()
+                .right_0()
+                .flex()
+                .flex_col()
+                .items_center()
+                .child(standing_mark())
+                .child(
+                    div()
+                        .mt(px(28.0))
+                        .w(px(360.0))
+                        .h(px(2.0))
+                        .rounded(px(1.0))
+                        .bg(rgb(AMBER))
+                        .opacity(0.7),
+                ),
+        )
+}
+
+fn standing_mark() -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(8.0))
+        .opacity(0.34)
+        .child(
+            div()
+                .w(px(52.0))
+                .h(px(52.0))
+                .rounded(px(26.0))
+                .bg(rgb(AMBER)),
+        )
+        .child(
+            div()
+                .w(px(124.0))
+                .h(px(96.0))
+                .rounded(px(32.0))
+                .bg(rgb(AMBER)),
+        )
+        .child(
+            div()
+                .w(px(76.0))
+                .h(px(108.0))
+                .rounded(px(24.0))
+                .bg(rgb(AMBER)),
+        )
+}
+
 struct Overlay {
     stand: Entity<Stand>,
     focus: FocusHandle,
@@ -962,12 +1047,15 @@ impl Render for Overlay {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let remaining = self.stand.read(cx).session.remaining(Instant::now());
         let label = format_remaining(remaining);
+        let line = self.stand.read(cx).break_line;
         div()
             .id("break-surface")
             .track_focus(&self.focus)
+            .relative()
             .flex()
             .size_full()
-            .bg(rgba(BREAK_VEIL))
+            .overflow_hidden()
+            .bg(rgb(BREAK_INK))
             .text_color(rgb(PAPER))
             .on_mouse_down(
                 MouseButton::Left,
@@ -1001,13 +1089,16 @@ impl Render for Overlay {
                     this.on_escape(false, cx);
                 }
             }))
-            .child(break_copy(
-                &label,
-                break_prompt(remaining),
-                false,
-                "end-break",
-                cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
-            ))
+            .child(break_scene())
+            .child(
+                div().flex().flex_1().pb(px(120.0)).child(break_copy(
+                    &label,
+                    line,
+                    false,
+                    "end-break",
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
+                )),
+            )
     }
 }
 
