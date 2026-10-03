@@ -97,7 +97,7 @@ impl Session {
         } else if self.is_warning(now) {
             format!("Break in {}", format_remaining(self.remaining(now)))
         } else {
-            format!("Stand {}", format_remaining(self.remaining(now)))
+            format_remaining(self.remaining(now))
         }
     }
 

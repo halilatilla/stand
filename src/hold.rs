@@ -23,6 +23,23 @@ pub fn collection_behavior_bits() -> usize {
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const MAXIMUM_WINDOW_LEVEL_KEY: i32 = 14;
 
+/// Move `window` offscreen without closing it, so a settings window does not
+/// show a second countdown through the break veil.
+pub fn order_out(window: &gpui::Window) {
+    #[cfg(target_os = "macos")]
+    order_mac(window, false);
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
+/// Bring `window` back after the break.
+pub fn order_front(window: &gpui::Window) {
+    #[cfg(target_os = "macos")]
+    order_mac(window, true);
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
 /// Raise `window` to the highest window level, pin it to every Space, and make
 /// it key so the break receives the keyboard.
 ///
@@ -37,25 +54,51 @@ pub fn enforce(window: &gpui::Window) {
 }
 
 #[cfg(target_os = "macos")]
-fn enforce_mac(window: &gpui::Window) {
-    use objc::runtime::{NO, Object};
+fn order_mac(window: &gpui::Window, front: bool) {
+    use objc::{msg_send, sel, sel_impl};
+
+    let Some(ns_window) = ns_window(window) else {
+        return;
+    };
+    unsafe {
+        let nil: *mut objc::runtime::Object = std::ptr::null_mut();
+        if front {
+            let _: () = msg_send![ns_window, orderFront: nil];
+        } else {
+            let _: () = msg_send![ns_window, orderOut: nil];
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ns_window(window: &gpui::Window) -> Option<*mut objc::runtime::Object> {
+    use objc::runtime::Object;
     use objc::{msg_send, sel, sel_impl};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return;
-    };
+    let handle = HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
-        return;
+        return None;
     };
     let view = appkit.ns_view.as_ptr() as *mut Object;
+    let ns_window: *mut Object = unsafe { msg_send![view, window] };
+    if ns_window.is_null() {
+        None
+    } else {
+        Some(ns_window)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn enforce_mac(window: &gpui::Window) {
+    use objc::runtime::{NO, Object};
+    use objc::{msg_send, sel, sel_impl};
+
+    let Some(ns_window) = ns_window(window) else {
+        return;
+    };
 
     unsafe {
-        let ns_window: *mut Object = msg_send![view, window];
-        if ns_window.is_null() {
-            return;
-        }
-
         let level: isize = CGWindowLevelForKey(MAXIMUM_WINDOW_LEVEL_KEY) as isize;
         let _: () = msg_send![ns_window, setLevel: level];
 

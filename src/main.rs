@@ -6,11 +6,14 @@ mod settings;
 
 use std::time::{Duration, Instant};
 
+use std::sync::{Arc, OnceLock};
+
 use gpui::{
-    App, Bounds, ClickEvent, Context, DisplayId, Entity, FocusHandle, FontWeight, Global,
-    KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, Pixels, Size, Subscription,
-    TitlebarOptions,     Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowHandle, WindowKind,
-    WindowOptions, div, point, prelude::*, px, rgb, rgba, size,
+    App, Bounds, ClickEvent, Context, DisplayId, Entity, FocusHandle, FontWeight, Global, Image,
+    ImageFormat, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, Pixels, Size,
+    Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowDecorations, WindowHandle, WindowKind, WindowOptions, div, img, point, prelude::*, px,
+    rgb, rgba, size,
 };
 use gpui_platform::application;
 
@@ -364,14 +367,15 @@ fn open_settings(cx: &mut App, stand: &Entity<Stand>) {
 
 fn settings_options(cx: &App) -> WindowOptions {
     WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(440.0), px(680.0)), cx)),
+        window_bounds: Some(WindowBounds::centered(size(px(440.0), px(860.0)), cx)),
         titlebar: Some(TitlebarOptions {
             title: Some("Stand".into()),
-            ..Default::default()
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(20.0), px(18.0))),
         }),
         focus: true,
         is_resizable: true,
-        window_min_size: Some(size(px(380.0), px(640.0))),
+        window_min_size: Some(size(px(400.0), px(820.0))),
         app_id: Some("stand".into()),
         ..Default::default()
     }
@@ -430,7 +434,8 @@ fn warning_options(cx: &App) -> WindowOptions {
         window_bounds: Some(bounds),
         titlebar: Some(TitlebarOptions {
             title: Some("Stand".into()),
-            ..Default::default()
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(16.0), px(16.0))),
         }),
         focus: false,
         show: true,
@@ -458,6 +463,7 @@ impl Render for Warning {
             .bg(rgb(INK))
             .text_color(rgb(PAPER))
             .px(px(22.0))
+            .pt(px(18.0))
             .gap(px(6.0))
             .child(
                 div()
@@ -498,8 +504,26 @@ fn queue_open(cx: &mut App, stand: Entity<Stand>) {
             }
             cx.notify();
         });
+        if !stand.read(cx).overlays.is_empty() {
+            restack_settings(cx, &stand, false);
+        }
         cx.activate(true);
     });
+}
+
+fn restack_settings(cx: &mut App, stand: &Entity<Stand>, front: bool) {
+    let Some(settings) = stand.read(cx).settings_window else {
+        return;
+    };
+    settings
+        .update(cx, |_, window, _| {
+            if front {
+                hold::order_front(window);
+            } else {
+                hold::order_out(window);
+            }
+        })
+        .ok();
 }
 
 fn queue_close(cx: &mut App, stand: Entity<Stand>) {
@@ -511,6 +535,7 @@ fn queue_close(cx: &mut App, stand: Entity<Stand>) {
                 .ok();
         }
         stand.update(cx, |_, cx| cx.notify());
+        restack_settings(cx, &stand, true);
     });
 }
 
@@ -535,6 +560,7 @@ fn reassert_break(cx: &mut App, stand: &Entity<Stand>) {
     if !covered {
         cx.activate(true);
     }
+    restack_settings(cx, stand, false);
 }
 
 impl Render for Stand {
@@ -577,14 +603,18 @@ impl Render for Stand {
             }));
 
         if in_break {
-            let left = self.session.remaining(Instant::now());
-            root = root.child(break_copy(
-                &format_remaining(left),
-                break_prompt(left),
-                true,
-                "end-break-window",
-                cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
-            ));
+            // The cover already shows the countdown. Drawing it here too
+            // shows a second copy through the veil.
+            if self.overlays.is_empty() {
+                let left = self.session.remaining(Instant::now());
+                root = root.child(break_copy(
+                    &format_remaining(left),
+                    break_prompt(left),
+                    true,
+                    "end-break-window",
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
+                ));
+            }
         } else {
             let (work_shown, work_editing) = field_label(
                 &self.draft,
@@ -627,25 +657,35 @@ fn settings_body(
         .flex()
         .flex_col()
         .flex_1()
-        .p(px(28.0))
+        .pt(px(52.0))
+        .px(px(28.0))
+        .pb(px(28.0))
         .gap(px(22.0))
         .child(
             div()
                 .flex()
-                .flex_col()
-                .gap(px(8.0))
+                .flex_row()
+                .items_center()
+                .gap(px(14.0))
                 .child(
-                    div()
-                        .text_size(px(34.0))
-                        .font_weight(FontWeight::BOLD)
-                        .child("Stand"),
+                    img(brand_image())
+                        .w(px(44.0))
+                        .h(px(44.0))
+                        .rounded(px(10.0))
+                        .overflow_hidden(),
                 )
                 .child(
                     div()
-                        .text_size(px(15.0))
-                        .text_color(rgb(MUTED))
-                        .child("Play with the minutes here. The timer keeps the current version until you use this one."),
+                        .text_size(px(28.0))
+                        .font_weight(FontWeight::BOLD)
+                        .child("Stand"),
                 ),
+        )
+        .child(
+            div()
+                .text_size(px(15.0))
+                .text_color(rgb(MUTED))
+                .child("Play with the minutes here. The timer keeps the current version until you use this one."),
         )
         .child(duration_row(
             "Work interval",
@@ -1049,6 +1089,19 @@ impl Overlay {
 fn hold_overlay_focus(overlay: &mut Overlay, window: &mut Window, cx: &mut Context<Overlay>) {
     overlay.focus.focus(window, cx);
     cx.stop_propagation();
+}
+
+fn brand_image() -> Arc<Image> {
+    static IMAGE: OnceLock<Arc<Image>> = OnceLock::new();
+    IMAGE
+        .get_or_init(|| {
+            Arc::new(Image {
+                format: ImageFormat::Png,
+                bytes: include_bytes!("../assets/AppIcon.png").to_vec(),
+                id: 1,
+            })
+        })
+        .clone()
 }
 
 fn minutes_label(minutes: u32) -> String {
