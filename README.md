@@ -21,8 +21,7 @@ The login lock (`CGSession -suspend`, or the Fast User Switching lock) is owned 
 
 A break is an app window:
 
-- a solid dark field, with a standing figure and a warm light along the floor
-- one instruction, chosen when the break starts and kept until it ends
+- a solid cover, with one instruction kept for the whole break
 - one borderless window per display
 - on macOS, GPUI simple fullscreen (covers the menu bar and notch, and does not create a new Space), then the window is raised to the highest window level, pinned to every Space, and made key so it keeps the keyboard
 - the window refuses to close until the break ends

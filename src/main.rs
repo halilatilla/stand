@@ -10,7 +10,7 @@ use std::sync::{Arc, OnceLock};
 
 use gpui::{
     App, Bounds, ClickEvent, Context, DisplayId, Entity, FocusHandle, FontWeight, Global, Image,
-    ImageFormat,     KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, Pixels, Size,
+    ImageFormat, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, Pixels, Size,
     Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
     WindowDecorations, WindowHandle, WindowKind, WindowOptions, div, img, linear_color_stop,
     linear_gradient, point, prelude::*, px, rgb, rgba, size,
@@ -597,8 +597,7 @@ impl Render for Stand {
             }));
 
         if in_break {
-            // The cover already shows the countdown. Drawing it here too
-            // shows a second copy through the veil.
+            // The cover already shows the countdown.
             if self.overlays.is_empty() {
                 let left = format_remaining(self.session.remaining(Instant::now()));
                 let line = self.break_line;
@@ -967,7 +966,6 @@ fn break_copy(
         )
 }
 
-/// Quiet standing mark and a warm pool of light. The words stay in front.
 fn break_scene() -> impl IntoElement {
     div()
         .absolute()
