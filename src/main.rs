@@ -27,7 +27,9 @@ const PAPER: u32 = 0xf3eee6;
 const MUTED: u32 = 0xa89b8c;
 const AMBER: u32 = 0xe39a4b;
 const AMBER_INK: u32 = 0x1a140e;
-const BREAK_INK: u32 = 0x100e0c;
+/// Deep leaf green at about 91% opacity, so the desktop shows through faintly.
+const BREAK_VEIL: u32 = 0x163e2ce8;
+const LEAF: u32 = 0xb7e4c7;
 
 struct StandKeepAlive(#[allow(dead_code)] Entity<Stand>);
 
@@ -607,7 +609,7 @@ impl Render for Stand {
                         .flex()
                         .flex_1()
                         .size_full()
-                        .bg(rgb(BREAK_INK))
+                        .bg(rgba(BREAK_VEIL))
                         .child(break_scene())
                         .child(break_copy(
                             &left,
@@ -920,7 +922,7 @@ fn break_copy(
         .items_center()
         .justify_center()
         .gap(px(16.0))
-        .child(div().w(px(48.0)).h(px(3.0)).bg(rgb(AMBER)))
+        .child(div().w(px(48.0)).h(px(3.0)).bg(rgb(LEAF)))
         .child(
             div()
                 .text_size(title)
@@ -979,8 +981,8 @@ fn break_scene() -> impl IntoElement {
                 .h(px(420.0))
                 .bg(linear_gradient(
                     180.0,
-                    linear_color_stop(rgba(0xe39a4b00), 0.0),
-                    linear_color_stop(rgba(0xe39a4b2a), 1.0),
+                    linear_color_stop(rgba(0x95d5b200), 0.0),
+                    linear_color_stop(rgba(0x95d5b255), 1.0),
                 )),
         )
         .child(
@@ -999,8 +1001,8 @@ fn break_scene() -> impl IntoElement {
                         .w(px(360.0))
                         .h(px(2.0))
                         .rounded(px(1.0))
-                        .bg(rgb(AMBER))
-                        .opacity(0.7),
+                        .bg(rgb(LEAF))
+                        .opacity(0.85),
                 ),
         )
 }
@@ -1011,27 +1013,27 @@ fn standing_mark() -> impl IntoElement {
         .flex_col()
         .items_center()
         .gap(px(8.0))
-        .opacity(0.34)
+        .opacity(0.55)
         .child(
             div()
                 .w(px(52.0))
                 .h(px(52.0))
                 .rounded(px(26.0))
-                .bg(rgb(AMBER)),
+                .bg(rgb(LEAF)),
         )
         .child(
             div()
                 .w(px(124.0))
                 .h(px(96.0))
                 .rounded(px(32.0))
-                .bg(rgb(AMBER)),
+                .bg(rgb(LEAF)),
         )
         .child(
             div()
                 .w(px(76.0))
                 .h(px(108.0))
                 .rounded(px(24.0))
-                .bg(rgb(AMBER)),
+                .bg(rgb(LEAF)),
         )
 }
 
@@ -1053,7 +1055,7 @@ impl Render for Overlay {
             .flex()
             .size_full()
             .overflow_hidden()
-            .bg(rgb(BREAK_INK))
+            .bg(rgba(BREAK_VEIL))
             .text_color(rgb(PAPER))
             .on_mouse_down(
                 MouseButton::Left,
