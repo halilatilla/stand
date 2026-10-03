@@ -1,6 +1,6 @@
 [package]
 name = "stand"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "A break timer that covers the screen until you have stood up"
 license = "Apache-2.0"

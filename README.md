@@ -1,6 +1,6 @@
 # Stand
 
-Stand is a break timer for long coding sessions. On a Mac it lives in the menu bar. A warning appears 30 seconds before the screen is covered. Time you were already away, for at least as long as the break, counts as that break. There is no snooze. **End break** on the break screen stops it immediately.
+Stand is a break timer for long coding sessions. On a Mac it lives in the menu bar. A warning appears 30 seconds before the screen is covered. A call or a fullscreen window pauses the work clock. Time you were already away, for at least as long as the break, counts as that break. There is no snooze. **End break** on the break screen stops it immediately.
 
 The defaults are 50 minutes of work and a 5 minute break. Both can be changed in the window:
 
@@ -21,7 +21,7 @@ The login lock (`CGSession -suspend`, or the Fast User Switching lock) is owned 
 
 A break is an app window:
 
-- a green cover you can see through, with one instruction kept for the whole break
+- a cover you can see through, with one color and one line kept for the whole break
 - one borderless window per display
 - on macOS, GPUI simple fullscreen (covers the menu bar and notch, and does not create a new Space), then the window is raised to the highest window level, pinned to every Space, and made key so it keeps the keyboard
 - the window refuses to close until the break ends
