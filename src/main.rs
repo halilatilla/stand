@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 use std::sync::{Arc, OnceLock};
 
 use gpui::{
-    App, Bounds, ClickEvent, Context, DisplayId, Entity, FocusHandle, FontWeight, Global, Image,
-    ImageFormat, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, Pixels, Size,
-    Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    Animation, AnimationExt, App, Bounds, ClickEvent, Context, DisplayId, Entity, FocusHandle,
+    FontWeight, Global, Image, ImageFormat, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
+    Pixels, Size, Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
     WindowDecorations, WindowHandle, WindowKind, WindowOptions, div, img, linear_color_stop,
     linear_gradient, point, prelude::*, px, rgb, rgba, size,
 };
@@ -116,6 +116,7 @@ impl Stand {
         }
 
         let now = Instant::now();
+        self.session.set_held(idle::machine_is_busy(), now);
         let effect = self.session.tick_with_idle(now, idle::idle_duration());
         let second = self.session.remaining(now).as_secs();
         let second_changed = self.last_second != Some(second);
@@ -617,7 +618,12 @@ impl Render for Stand {
                             true,
                             "end-break-window",
                             cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
-                        )),
+                        ))
+                        .with_animation(
+                            "break-fade",
+                            Animation::new(Duration::from_secs(1)),
+                            |cover, progress| cover.opacity(progress),
+                        ),
                 );
             }
         } else {
@@ -1098,6 +1104,11 @@ impl Render for Overlay {
                     "end-break",
                     cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
                 )),
+            )
+            .with_animation(
+                "break-fade",
+                Animation::new(Duration::from_secs(1)),
+                |cover, progress| cover.opacity(progress),
             )
     }
 }

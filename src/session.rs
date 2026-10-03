@@ -24,6 +24,8 @@ pub enum Effect {
 enum Phase {
     Working {
         started: Instant,
+        /// Remaining work time, frozen while the Mac is busy.
+        held: Option<Duration>,
     },
     Break {
         ends_at: Instant,
@@ -49,7 +51,10 @@ impl Session {
     pub fn new(settings: Settings, now: Instant) -> Self {
         Self {
             settings,
-            phase: Phase::Working { started: now },
+            phase: Phase::Working {
+                started: now,
+                held: None,
+            },
             away: false,
             #[cfg(test)]
             test_work: None,
@@ -82,7 +87,7 @@ impl Session {
 
     /// The last `WARNING_LEAD` of a work interval, while the person is still here.
     pub fn is_warning(&self, now: Instant) -> bool {
-        if self.is_break() || self.away {
+        if self.is_break() || self.away || self.is_held() {
             return false;
         }
         let left = self.remaining(now);
@@ -119,10 +124,10 @@ impl Session {
 
     pub fn remaining(&self, now: Instant) -> Duration {
         match &self.phase {
-            Phase::Working { started } => {
+            Phase::Working { started, held } => held.unwrap_or_else(|| {
                 let end = *started + self.work_duration();
                 end.saturating_duration_since(now)
-            }
+            }),
             Phase::Break { ends_at, .. } => ends_at.saturating_duration_since(now),
         }
     }
@@ -165,7 +170,10 @@ impl Session {
     /// Idle at least as long as the break counts as that break already taken.
     pub fn tick_with_idle(&mut self, now: Instant, idle: Duration) -> Effect {
         match self.phase.clone() {
-            Phase::Working { started } => {
+            Phase::Working { started, held } => {
+                if held.is_some() {
+                    return Effect::None;
+                }
                 if !self.is_break() && idle >= self.lock_duration() {
                     self.away = true;
                     return Effect::None;
@@ -255,9 +263,47 @@ impl Session {
         };
     }
 
+    /// Freeze the work countdown while `held` is true, then continue from the
+    /// time that was left. A break that has already started keeps running.
+    pub fn set_held(&mut self, held: bool, now: Instant) {
+        if self.is_break() {
+            return;
+        }
+        let work = self.work_duration();
+        let Phase::Working {
+            started,
+            held: frozen,
+        } = &mut self.phase
+        else {
+            return;
+        };
+        if held {
+            if frozen.is_none() {
+                let end = *started + work;
+                *frozen = Some(end.saturating_duration_since(now));
+            }
+        } else if let Some(left) = frozen.take() {
+            let elapsed = work.saturating_sub(left);
+            *started = now.checked_sub(elapsed).unwrap_or(now);
+        }
+    }
+
+    fn is_held(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Working {
+                held: Some(_),
+                ..
+            }
+        )
+    }
+
     fn begin_work(&mut self, now: Instant) {
         self.away = false;
-        self.phase = Phase::Working { started: now };
+        self.phase = Phase::Working {
+            started: now,
+            held: None,
+        };
     }
 
     fn work_duration(&self) -> Duration {
@@ -464,6 +510,24 @@ mod tests {
             assert!(session.is_break());
         }
         assert_eq!(session.tick(at(start, 20)), Effect::EndedBreak);
+    }
+
+    #[test]
+    fn a_busy_mac_freezes_the_work_clock_until_it_is_free() {
+        let start = Instant::now();
+        let mut session =
+            Session::working_for(Duration::from_secs(100), Duration::from_secs(5), start);
+        let busy_at = at(start, 80);
+        session.set_held(true, busy_at);
+        assert_eq!(session.remaining(busy_at), Duration::from_secs(20));
+        assert!(!session.is_warning(busy_at));
+        assert_eq!(session.tick(at(start, 130)), Effect::None);
+        assert!(!session.is_break());
+        assert_eq!(session.remaining(at(start, 130)), Duration::from_secs(20));
+        session.set_held(false, at(start, 130));
+        assert_eq!(session.remaining(at(start, 130)), Duration::from_secs(20));
+        assert_eq!(session.tick(at(start, 149)), Effect::None);
+        assert_eq!(session.tick(at(start, 150)), Effect::BeganBreak);
     }
 
     #[test]
