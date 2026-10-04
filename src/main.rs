@@ -6,64 +6,105 @@ mod settings;
 
 use std::time::{Duration, Instant};
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use gpui::{
     Animation, AnimationExt, App, Bounds, ClickEvent, Context, DisplayId, Entity, FocusHandle,
-    FontFeatures, FontWeight, Global, Image, ImageFormat, KeyDownEvent, KeyUpEvent, MouseButton,
-    MouseDownEvent,
-    Pixels, Size, Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowDecorations, WindowHandle, WindowKind, WindowOptions, div, img, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, rgba, size,
+    FontFeatures, FontWeight, Global, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
+    Pixels, Size, Subscription, TitlebarOptions, Window, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowHandle, WindowKind,
+    WindowOptions, div, linear_color_stop, linear_gradient, point, prelude::*, px, rgb, rgba, size,
 };
 use gpui_platform::application;
 
 use menu_bar::MenuCommand;
-use session::{Effect, Session, format_remaining};
+use session::{Activity, Effect, Session, format_remaining};
 use settings::{MAX_INTERVAL_MINUTES, MAX_LOCK_MINUTES, MIN_INTERVAL_MINUTES, MIN_LOCK_MINUTES};
 
-const INK: u32 = 0x171512;
-const INK_RAISED: u32 = 0x2a241c;
+struct Palette {
+    text: u32,
+    paper: u32,
+    card: u32,
+    muted: u32,
+    line: u32,
+    stroke: u32,
+    good: u32,
+    wash: u32,
+    wash_ink: u32,
+    button_text: u32,
+}
+
+impl Palette {
+    fn light() -> Self {
+        Self {
+            text: 0x171512,
+            paper: 0xf3eee6,
+            card: 0xfffbf6,
+            muted: 0xa89b8c,
+            line: 0xe4ddd4,
+            stroke: 0xc4b8aa,
+            good: 0x2f6f4e,
+            wash: 0xf6e6d4,
+            wash_ink: 0x6b4a24,
+            button_text: 0xf3eee6,
+        }
+    }
+
+    fn dark() -> Self {
+        Self {
+            text: 0xf4efe8,
+            paper: 0x161412,
+            card: 0x2a2622,
+            muted: 0xb7aa9c,
+            line: 0x3f3934,
+            stroke: 0x8a7d72,
+            good: 0x8fbf9a,
+            wash: 0x3a2f22,
+            wash_ink: 0xf0d3b0,
+            button_text: 0x171512,
+        }
+    }
+}
+
+fn palette(window: &Window) -> Palette {
+    match window.appearance() {
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => Palette::dark(),
+        WindowAppearance::Light | WindowAppearance::VibrantLight => Palette::light(),
+    }
+}
+
 const PAPER: u32 = 0xf3eee6;
-const MUTED: u32 = 0xa89b8c;
-const AMBER: u32 = 0xe39a4b;
-const AMBER_INK: u32 = 0x1a140e;
 struct BreakScene {
     veil: u32,
     mark: u32,
     glow: u32,
-    arms_up: bool,
     line: &'static str,
 }
 
 const SCENES: &[BreakScene] = &[
     BreakScene {
-        veil: 0x163e2ce8,
-        mark: 0xb7e4c7,
-        glow: 0x95d5b2,
-        arms_up: false,
-        line: "Go touch some grass. The real kind.",
+        veil: 0x241c16,
+        mark: 0xf6e7cf,
+        glow: 0xe7a15c,
+        line: "Stay. The work can wait.",
     },
     BreakScene {
-        veil: 0x6a4a12e8,
-        mark: 0xf0d48a,
-        glow: 0xf0c14b,
-        arms_up: true,
-        line: "Your spine filed a complaint.",
+        veil: 0x1a2230,
+        mark: 0xdfe7f0,
+        glow: 0x8aa4c4,
+        line: "Don't go back yet.",
     },
     BreakScene {
-        veil: 0x1a3d66e8,
-        mark: 0xc5dff0,
-        glow: 0x8ec4e8,
-        arms_up: false,
-        line: "Look at a cloud. Not a Slack thread.",
+        veil: 0x17241c,
+        mark: 0xe4f0e2,
+        glow: 0x8fb08a,
+        line: "Rest is the healthy part.",
     },
     BreakScene {
-        veil: 0x241848e8,
-        mark: 0xd4c8f0,
-        glow: 0xa090e0,
-        arms_up: true,
-        line: "The chair is not your personality.",
+        veil: 0x2a1c22,
+        mark: 0xf6e4dc,
+        glow: 0xd4a090,
+        line: "Sit. Let the screen go.",
     },
 ];
 
@@ -98,6 +139,8 @@ struct Stand {
     prompt_index: usize,
     last_second: Option<u64>,
     focus: FocusHandle,
+    theme: Option<Subscription>,
+    warning_theme: Option<Subscription>,
 }
 
 impl Stand {
@@ -120,10 +163,13 @@ impl Stand {
             prompt_index: 0,
             last_second: None,
             focus: cx.focus_handle(),
+            theme: None,
+            warning_theme: None,
         }
     }
 
     fn start(&mut self, cx: &mut Context<Self>) {
+        self.publish_menu();
         cx.spawn(async move |this, cx| {
             loop {
                 let delay = this
@@ -143,6 +189,8 @@ impl Stand {
         for command in menu_bar::poll() {
             match command {
                 MenuCommand::StartBreak => self.lock_now(cx),
+                MenuCommand::SetWork(minutes) => self.set_work(minutes, cx),
+                MenuCommand::SetBreak(minutes) => self.set_lock(minutes, cx),
                 MenuCommand::Settings => {
                     let stand = stand.clone();
                     cx.defer(move |cx| open_settings(cx, &stand));
@@ -157,7 +205,7 @@ impl Stand {
         let second = self.session.remaining(now).as_secs();
         let second_changed = self.last_second != Some(second);
         self.last_second = Some(second);
-        menu_bar::set_title(&self.session.status_label(now));
+        self.publish_menu();
         match effect {
             Effect::BeganBreak => {
                 self.pin_break_line();
@@ -357,6 +405,19 @@ impl Stand {
         }
     }
 
+    fn publish_menu(&self) {
+        let now = Instant::now();
+        let activity = self.session.activity(now);
+        let (work, lock) = self.schedule();
+        menu_bar::set_view(menu_bar::MenuView {
+            status: activity.label(),
+            symbol: activity.symbol(),
+            can_start: activity != Activity::OnBreak,
+            work_minutes: work,
+            break_minutes: lock,
+        });
+    }
+
     fn persist(&mut self, cx: &mut Context<Self>) {
         if let Err(err) = self.session.settings().save(&self.settings_path) {
             eprintln!("stand: could not save settings: {err}");
@@ -385,12 +446,20 @@ fn open_settings(cx: &mut App, stand: &Entity<Stand>) {
             if in_break {
                 return false;
             }
-            weak.update(cx, |stand, _| stand.settings_window = None)
-                .ok();
+            weak.update(cx, |stand, _| {
+                stand.settings_window = None;
+                stand.theme = None;
+            })
+            .ok();
             #[cfg(not(target_os = "macos"))]
             cx.defer(|cx| cx.quit());
             true
         });
+        let watch = owner.clone();
+        let theme = window.observe_window_appearance(move |_, cx| {
+            watch.update(cx, |_, cx| cx.notify());
+        });
+        owner.update(cx, |stand, _| stand.theme = Some(theme));
         let focus = owner.read(cx).focus.clone();
         window.focus(&focus, cx);
         owner
@@ -406,15 +475,14 @@ fn open_settings(cx: &mut App, stand: &Entity<Stand>) {
 
 fn settings_options(cx: &App) -> WindowOptions {
     WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(420.0), px(600.0)), cx)),
+        window_bounds: Some(WindowBounds::centered(size(px(380.0), px(540.0)), cx)),
         titlebar: Some(TitlebarOptions {
             title: Some("Stand".into()),
             appears_transparent: true,
             traffic_light_position: Some(point(px(20.0), px(18.0))),
         }),
         focus: true,
-        is_resizable: true,
-        window_min_size: Some(size(px(380.0), px(560.0))),
+        is_resizable: false,
         app_id: Some("stand".into()),
         ..Default::default()
     }
@@ -433,10 +501,16 @@ fn open_warning(cx: &mut App, stand: &Entity<Stand>) {
                 stand.warning = None;
                 stand.warning_opening = false;
                 stand.warning_dismissed = true;
+                stand.warning_theme = None;
             })
             .ok();
             true
         });
+        let watch = owner.clone();
+        let theme = window.observe_window_appearance(move |_, cx| {
+            watch.update(cx, |_, cx| cx.notify());
+        });
+        owner.update(cx, |stand, _| stand.warning_theme = Some(theme));
         cx.new(|cx| {
             let subscription = cx.observe(&owner, |_, _, cx| cx.notify());
             Warning {
@@ -489,29 +563,36 @@ struct Warning {
 }
 
 impl Render for Warning {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = palette(window);
         let left = self.stand.read(cx).session.remaining(Instant::now());
         div()
             .flex()
-            .flex_col()
             .size_full()
-            .justify_center()
-            .bg(rgb(INK))
-            .text_color(rgb(PAPER))
-            .px(px(22.0))
-            .gap(px(4.0))
+            .items_center()
+            .bg(rgb(colors.paper))
+            .text_color(rgb(colors.text))
+            .px(px(16.0))
+            .gap(px(10.0))
+            .child(presence_mark(true, colors.paper, &colors))
             .child(
                 div()
-                    .text_size(px(22.0))
-                    .font_weight(FontWeight::BOLD)
-                    .font_features(clock_features())
-                    .child(format!("Break in {}", format_remaining(left))),
-            )
-            .child(
-                div()
-                    .text_size(px(14.0))
-                    .text_color(rgb(MUTED))
-                    .child("The screen covers when this reaches zero."),
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.0))
+                    .child(
+                        div()
+                            .text_size(px(15.0))
+                            .font_weight(FontWeight::BOLD)
+                            .font_features(clock_features())
+                            .child(format!("Break in {}", format_remaining(left))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(rgb(colors.muted))
+                            .child("The screen covers when this reaches zero."),
+                    ),
             )
     }
 }
@@ -600,9 +681,12 @@ fn reassert_break(cx: &mut App, stand: &Entity<Stand>) {
 }
 
 impl Render for Stand {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = palette(window);
         let in_break = self.session.is_break();
-        let remaining = format_remaining(self.session.remaining(Instant::now()));
+        let now = Instant::now();
+        let remaining = format_remaining(self.session.remaining(now));
+        let activity = self.session.activity(now);
         let (work_minutes, lock_minutes) = self.schedule();
 
         let mut root = div()
@@ -611,8 +695,8 @@ impl Render for Stand {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(INK))
-            .text_color(rgb(PAPER))
+            .bg(rgb(colors.paper))
+            .text_color(rgb(colors.text))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if this.draft.is_some() && !event.is_held {
                     this.type_minutes(&event.keystroke.key, cx);
@@ -636,18 +720,22 @@ impl Render for Stand {
         if in_break {
             // The cover already shows the countdown.
             if self.overlays.is_empty() {
-                let left = format_remaining(self.session.remaining(Instant::now()));
+                let now = Instant::now();
+                let left = format_remaining(self.session.remaining(now));
                 let scene = self.break_scene_now();
+                let fraction = break_fraction(&self.session, now);
                 root = root.child(
                     div()
                         .relative()
                         .flex()
                         .flex_1()
                         .size_full()
-                        .bg(rgba(scene.veil))
+                        .bg(rgb(scene.veil))
+                        .text_color(rgb(PAPER))
                         .child(break_scene(scene))
                         .child(break_copy(
                             &left,
+                            fraction,
                             scene,
                             true,
                             "end-break-window",
@@ -661,17 +749,16 @@ impl Render for Stand {
                 );
             }
         } else {
-            let (work_shown, work_editing) = field_label(
-                &self.draft,
-                MinutesField::Work,
-                minutes_label(work_minutes),
-            );
+            let (work_shown, work_editing) =
+                field_label(&self.draft, MinutesField::Work, minutes_label(work_minutes));
             let (lock_shown, lock_editing) = field_label(
                 &self.draft,
                 MinutesField::Break,
                 minutes_label(lock_minutes),
             );
             root = root.child(settings_body(
+                &colors,
+                activity,
                 work_minutes,
                 lock_minutes,
                 work_shown,
@@ -687,6 +774,8 @@ impl Render for Stand {
 }
 
 fn settings_body(
+    colors: &Palette,
+    activity: Activity,
     work_minutes: u32,
     lock_minutes: u32,
     work_shown: String,
@@ -696,206 +785,295 @@ fn settings_body(
     remaining: &str,
     cx: &mut Context<Stand>,
 ) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .pt(px(48.0))
-        .px(px(28.0))
-        .pb(px(24.0))
-        .gap(px(20.0))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(14.0))
-                .child(
-                    img(brand_image())
-                        .w(px(44.0))
-                        .h(px(44.0))
-                        .rounded(px(10.0))
-                        .overflow_hidden(),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(
-                            div()
-                                .text_size(px(14.0))
-                                .text_color(rgb(MUTED))
-                                .child("Next break in"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(36.0))
-                                .font_weight(FontWeight::BOLD)
-                                .font_features(clock_features())
-                                .whitespace_nowrap()
-                                .child(remaining.to_string()),
-                        ),
-                ),
-        )
-        .child(duration_row(
+    let schedule = section_group(colors)
+        .child(schedule_row(
+            colors,
             "Work",
             "Before the screen is covered.",
             work_shown,
             work_editing,
-            "work-dec",
             "work-value",
+            "work-dec",
             "work-inc",
             work_minutes > MIN_INTERVAL_MINUTES,
             work_minutes < MAX_INTERVAL_MINUTES,
-            cx.listener(|this, _: &ClickEvent, _, cx| this.adjust_work(-5, cx)),
-            cx.listener(|this, _: &ClickEvent, _, cx| this.begin_edit(MinutesField::Work, cx)),
-            cx.listener(|this, _: &ClickEvent, _, cx| this.adjust_work(5, cx)),
-        ))
-        .child(preset_row(
             &[("work-25", 25), ("work-50", 50), ("work-90", 90)],
             work_minutes,
-            work_editing,
             cx,
+            |this, cx| this.begin_edit(MinutesField::Work, cx),
+            |this, cx| this.adjust_work(-5, cx),
+            |this, cx| this.adjust_work(5, cx),
             |this, minutes, cx| this.set_work(minutes, cx),
         ))
-        .child(duration_row(
+        .child(row_rule(colors))
+        .child(schedule_row(
+            colors,
             "Break",
             "How long the cover stays.",
             lock_shown,
             lock_editing,
-            "lock-dec",
             "lock-value",
+            "lock-dec",
             "lock-inc",
             lock_minutes > MIN_LOCK_MINUTES,
             lock_minutes < MAX_LOCK_MINUTES,
-            cx.listener(|this, _: &ClickEvent, _, cx| this.adjust_lock(-5, cx)),
-            cx.listener(|this, _: &ClickEvent, _, cx| this.begin_edit(MinutesField::Break, cx)),
-            cx.listener(|this, _: &ClickEvent, _, cx| this.adjust_lock(5, cx)),
-        ))
-        .child(preset_row(
             &[("lock-5", 5), ("lock-10", 10), ("lock-20", 20)],
             lock_minutes,
-            lock_editing,
             cx,
+            |this, cx| this.begin_edit(MinutesField::Break, cx),
+            |this, cx| this.adjust_lock(-5, cx),
+            |this, cx| this.adjust_lock(5, cx),
             |this, minutes, cx| this.set_lock(minutes, cx),
-        ))
-        .child(
-            div()
-                .id("start-break")
-                .h(px(44.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(10.0))
-                .bg(rgb(INK_RAISED))
-                .text_color(rgb(PAPER))
-                .font_weight(FontWeight::BOLD)
-                .text_size(px(16.0))
-                .cursor_pointer()
-                .child("Start break")
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.lock_now(cx))),
-        )
-}
+        ));
 
-fn duration_row(
-    label: &'static str,
-    hint: &'static str,
-    value: String,
-    editing: bool,
-    dec_id: &'static str,
-    value_id: &'static str,
-    inc_id: &'static str,
-    can_dec: bool,
-    can_inc: bool,
-    on_dec: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_value: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_inc: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let value_bg = if editing { rgb(AMBER) } else { rgb(INK_RAISED) };
-    let value_ink = if editing { rgb(AMBER_INK) } else { rgb(PAPER) };
     div()
         .flex()
         .flex_col()
+        .flex_1()
+        .pt(px(52.0))
+        .px(px(20.0))
+        .pb(px(16.0))
+        .gap(px(14.0))
+        .child(now_status(colors, activity, remaining))
+        .child(section_label("Schedule", colors))
+        .child(schedule)
+        .child(div().flex().flex_row().justify_end().child(filled_button(
+            "start-break",
+            "Start break",
+            colors,
+            cx.listener(|this, _: &ClickEvent, _, cx| this.lock_now(cx)),
+        )))
+}
+
+fn now_status(colors: &Palette, activity: Activity, remaining: &str) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(10.0))
+        .child(presence_mark(activity.counting(), colors.paper, colors))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(1.0))
+                .child(
+                    div()
+                        .text_size(px(28.0))
+                        .font_weight(FontWeight::BOLD)
+                        .font_features(clock_features())
+                        .whitespace_nowrap()
+                        .child(remaining.to_string()),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(rgb(colors.muted))
+                        .child(activity.detail()),
+                ),
+        )
+}
+
+fn schedule_row(
+    colors: &Palette,
+    title: &'static str,
+    hint: &'static str,
+    shown: String,
+    editing: bool,
+    value_id: &'static str,
+    dec_id: &'static str,
+    inc_id: &'static str,
+    can_dec: bool,
+    can_inc: bool,
+    presets: &[(&'static str, u32)],
+    current: u32,
+    cx: &mut Context<Stand>,
+    on_value: fn(&mut Stand, &mut Context<Stand>),
+    on_dec: fn(&mut Stand, &mut Context<Stand>),
+    on_inc: fn(&mut Stand, &mut Context<Stand>),
+    apply: fn(&mut Stand, u32, &mut Context<Stand>),
+) -> impl IntoElement {
+    let on_value = cx.listener(move |this, _: &ClickEvent, _, cx| on_value(this, cx));
+    let on_dec = cx.listener(move |this, _: &ClickEvent, _, cx| on_dec(this, cx));
+    let on_inc = cx.listener(move |this, _: &ClickEvent, _, cx| on_inc(this, cx));
+    let mut chips = div().flex().flex_row().gap(px(6.0));
+    for (id, minutes) in presets {
+        let minutes = *minutes;
+        let selected = !editing && current == minutes;
+        let on_click = cx.listener(move |this, _: &ClickEvent, _, cx| apply(this, minutes, cx));
+        let label = minutes.to_string();
+        chips = if selected {
+            chips.child(filled_button(id, &label, colors, on_click))
+        } else {
+            chips.child(outline_button(id, &label, true, colors, on_click))
+        };
+    }
+    div()
+        .flex()
+        .flex_col()
+        .px(px(12.0))
+        .py(px(10.0))
         .gap(px(8.0))
-        .child(div().text_size(px(14.0)).child(label))
-        .child(div().text_size(px(13.0)).text_color(rgb(MUTED)).child(hint))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(div().text_size(px(15.0)).child(title))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(rgb(colors.muted))
+                        .child(hint),
+                ),
+        )
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(12.0))
-                .child(step_button(dec_id, "–5", can_dec, on_dec))
-                .child(
-                    div()
-                        .id(value_id)
-                        .flex_1()
-                        .h(px(44.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(8.0))
-                        .bg(value_bg)
-                        .text_color(value_ink)
-                        .text_size(px(22.0))
-                        .font_weight(FontWeight::BOLD)
-                        .cursor_pointer()
-                        .child(value)
-                        .on_click(on_value),
-                )
-                .child(step_button(inc_id, "+5", can_inc, on_inc)),
+                .gap(px(8.0))
+                .child(outline_button(dec_id, "–5", can_dec, colors, on_dec))
+                .child(value_chip(value_id, shown, editing, colors, on_value))
+                .child(outline_button(inc_id, "+5", can_inc, colors, on_inc)),
         )
+        .child(chips)
 }
 
-fn preset_row(
-    chips: &[(&'static str, u32)],
-    current: u32,
-    editing: bool,
-    cx: &mut Context<Stand>,
-    apply: fn(&mut Stand, u32, &mut Context<Stand>),
-) -> impl IntoElement {
-    let mut row = div().flex().flex_row().gap(px(8.0));
-    for (id, minutes) in chips {
-        let minutes = *minutes;
-        let selected = !editing && current == minutes;
-        row = row.child(chip(
-            id,
-            minutes.to_string(),
-            selected,
-            cx.listener(move |this, _: &ClickEvent, _, cx| apply(this, minutes, cx)),
-        ));
-    }
-    row
+fn section_label(text: &str, colors: &Palette) -> impl IntoElement {
+    div()
+        .pt(px(8.0))
+        .px(px(12.0))
+        .text_size(px(12.0))
+        .font_weight(FontWeight::BOLD)
+        .text_color(rgb(colors.muted))
+        .child(text.to_string())
 }
 
-fn chip(
-    id: &'static str,
-    label: String,
-    selected: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let bg = if selected { rgb(AMBER) } else { rgb(INK_RAISED) };
-    let ink = if selected {
-        rgb(AMBER_INK)
+fn section_group(colors: &Palette) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .rounded(px(10.0))
+        .bg(rgb(colors.card))
+}
+
+fn row_rule(colors: &Palette) -> impl IntoElement {
+    div().h(px(1.0)).mx(px(12.0)).bg(rgb(colors.line))
+}
+
+fn presence_mark(filled: bool, hole: u32, colors: &Palette) -> impl IntoElement {
+    let (outer, inner, size) = if filled {
+        (colors.good, colors.good, 10.0)
     } else {
-        rgb(PAPER)
+        (colors.line, hole, 6.0)
     };
     div()
-        .id(id)
-        .h(px(32.0))
-        .px(px(14.0))
+        .w(px(10.0))
+        .h(px(10.0))
+        .flex_shrink_0()
+        .rounded(px(5.0))
+        .bg(rgb(outer))
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(8.0))
-        .bg(bg)
-        .text_color(ink)
-        .text_size(px(14.0))
+        .child(
+            div()
+                .w(px(size))
+                .h(px(size))
+                .rounded(px(size / 2.0))
+                .bg(rgb(inner)),
+        )
+}
+
+fn value_chip(
+    id: &'static str,
+    shown: String,
+    editing: bool,
+    colors: &Palette,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let (bg, ink) = if editing {
+        (colors.wash, colors.wash_ink)
+    } else {
+        (colors.line, colors.text)
+    };
+    div()
+        .id(id)
+        .h(px(26.0))
+        .px(px(10.0))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded(px(13.0))
+        .bg(rgb(bg))
+        .text_color(rgb(ink))
+        .text_size(px(13.0))
         .font_weight(FontWeight::BOLD)
         .cursor_pointer()
-        .child(label)
+        .child(shown)
         .on_click(on_click)
+}
+
+fn filled_button(
+    id: &'static str,
+    label: &str,
+    colors: &Palette,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .h(px(26.0))
+        .px(px(12.0))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded(px(13.0))
+        .bg(rgb(colors.text))
+        .text_color(rgb(colors.button_text))
+        .text_size(px(13.0))
+        .font_weight(FontWeight::BOLD)
+        .cursor_pointer()
+        .child(label.to_string())
+        .on_click(on_click)
+}
+
+fn outline_button(
+    id: &'static str,
+    label: &str,
+    enabled: bool,
+    colors: &Palette,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let stroke = if enabled { colors.stroke } else { colors.line };
+    let ink = if enabled { colors.text } else { colors.muted };
+    let button = div()
+        .id(id)
+        .p(px(1.0))
+        .flex_shrink_0()
+        .rounded(px(13.0))
+        .bg(rgb(stroke))
+        .child(
+            div()
+                .h(px(24.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(12.0))
+                .bg(rgb(colors.card))
+                .text_size(px(13.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(ink))
+                .child(label.to_string()),
+        );
+    if enabled {
+        button.cursor_pointer().on_click(on_click)
+    } else {
+        button
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -922,184 +1100,209 @@ fn field_label(
     }
 }
 
-fn step_button(
-    id: &'static str,
-    label: &'static str,
-    enabled: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let button = div()
-        .id(id)
-        .flex()
-        .w(px(52.0))
-        .h(px(44.0))
-        .items_center()
-        .justify_center()
-        .rounded(px(8.0))
-        .bg(rgb(INK_RAISED))
-        .text_size(px(16.0))
-        .cursor_pointer()
-        .child(label);
-    let button = if enabled {
-        button
-    } else {
-        button.opacity(0.35)
-    };
-    button.on_click(on_click)
-}
-
 fn clock_features() -> FontFeatures {
     FontFeatures(Arc::new(vec![("tnum".into(), 1)]))
 }
 
+fn break_fraction(session: &Session, now: Instant) -> f32 {
+    let total = session.settings().lock_duration().as_secs_f32();
+    (session.remaining(now).as_secs_f32() / total).clamp(0.0, 1.0)
+}
+
 fn break_copy(
     remaining: &str,
+    fraction: f32,
     scene: &BreakScene,
     compact: bool,
     end_id: &'static str,
     on_end: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let title = if compact { px(40.0) } else { px(64.0) };
-    let clock = if compact { px(72.0) } else { px(128.0) };
+    let clock = if compact { px(40.0) } else { px(56.0) };
+    let line = if compact { px(20.0) } else { px(26.0) };
     div()
+        .relative()
         .flex()
         .flex_col()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .gap(px(16.0))
-        .child(div().w(px(48.0)).h(px(3.0)).bg(rgb(scene.mark)))
+        .size_full()
         .child(
             div()
-                .text_size(title)
-                .font_weight(FontWeight::BOLD)
-                .child("Stand up."),
-        )
-        .child(
-            div()
-                .text_size(px(18.0))
-                .text_color(rgb(MUTED))
-                .child(scene.line),
-        )
-        .child(
-            div()
-                .text_size(clock)
-                .font_weight(FontWeight::BOLD)
-                .font_features(clock_features())
-                .whitespace_nowrap()
-                .child(remaining.to_string()),
-        )
-        .child(
-            div()
-                .id(end_id)
-                .mt(px(4.0))
-                .h(px(40.0))
-                .px(px(22.0))
                 .flex()
+                .flex_col()
+                .flex_1()
                 .items_center()
                 .justify_center()
-                .rounded(px(10.0))
-                .bg(rgb(INK_RAISED))
-                .text_color(rgb(PAPER))
-                .font_weight(FontWeight::BOLD)
-                .text_size(px(15.0))
-                .cursor_pointer()
-                .child("End break")
-                .on_click(on_end),
-        )
-        .child(
-            div()
-                .text_size(px(13.0))
-                .text_color(rgb(MUTED))
-                .child("Hold Escape for 3 seconds."),
-        )
-}
-
-fn break_scene(scene: &BreakScene) -> impl IntoElement {
-    let glow = scene.glow << 8;
-    div()
-        .absolute()
-        .inset_0()
-        .child(
-            div()
-                .absolute()
-                .bottom_0()
-                .left_0()
-                .right_0()
-                .h(px(420.0))
-                .bg(linear_gradient(
-                    180.0,
-                    linear_color_stop(rgba(glow), 0.0),
-                    linear_color_stop(rgba(glow | 0x55), 1.0),
-                )),
+                .gap(px(22.0))
+                .child(resting_mark(scene.mark, scene.glow))
+                .child(
+                    div()
+                        .max_w(px(460.0))
+                        .text_center()
+                        .text_size(line)
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(rgb(scene.mark))
+                        .child(scene.line),
+                )
+                .child(
+                    div()
+                        .text_size(clock)
+                        .font_weight(FontWeight::LIGHT)
+                        .font_features(clock_features())
+                        .text_color(rgb(scene.mark))
+                        .opacity(0.7)
+                        .whitespace_nowrap()
+                        .child(remaining.to_string()),
+                )
+                .child(time_left_bar(scene, fraction)),
         )
         .child(
             div()
                 .absolute()
-                .bottom(px(36.0))
+                .bottom(px(if compact { 28.0 } else { 52.0 }))
                 .left_0()
                 .right_0()
                 .flex()
                 .flex_col()
                 .items_center()
-                .child(standing_mark(scene.mark, scene.arms_up))
+                .gap(px(8.0))
                 .child(
                     div()
-                        .mt(px(28.0))
-                        .w(px(360.0))
-                        .h(px(2.0))
-                        .rounded(px(1.0))
+                        .id(end_id)
+                        .p(px(1.0))
+                        .rounded(px(16.0))
                         .bg(rgb(scene.mark))
-                        .opacity(0.85),
+                        .cursor_pointer()
+                        .on_click(on_end)
+                        .child(
+                            div()
+                                .h(px(30.0))
+                                .px(px(16.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(15.0))
+                                .bg(rgb(scene.veil))
+                                .text_color(rgb(PAPER))
+                                .text_size(px(14.0))
+                                .child("End break"),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(rgb(scene.mark))
+                        .opacity(0.75)
+                        .child("Hold Escape for 3 seconds."),
                 ),
         )
 }
 
-fn standing_mark(color: u32, arms_up: bool) -> impl IntoElement {
-    let head = div()
-        .w(px(52.0))
-        .h(px(52.0))
-        .rounded(px(26.0))
-        .bg(rgb(color));
-    let top = if arms_up {
-        div()
-            .flex()
-            .items_end()
-            .gap(px(10.0))
-            .child(raised_arm(color))
-            .child(head)
-            .child(raised_arm(color))
-    } else {
-        div().child(head)
-    };
+fn time_left_bar(scene: &BreakScene, fraction: f32) -> impl IntoElement {
+    let track = 168.0;
+    let filled = (fraction.clamp(0.0, 1.0) * track).max(3.0);
     div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(8.0))
-        .opacity(0.55)
-        .child(top)
+        .relative()
+        .w(px(track))
+        .h(px(3.0))
+        .rounded(px(2.0))
+        .bg(rgba((scene.mark << 8) | 0x44))
         .child(
             div()
-                .w(px(124.0))
-                .h(px(96.0))
-                .rounded(px(32.0))
-                .bg(rgb(color)),
-        )
-        .child(
-            div()
-                .w(px(76.0))
-                .h(px(108.0))
-                .rounded(px(24.0))
-                .bg(rgb(color)),
+                .absolute()
+                .top_0()
+                .left_0()
+                .h(px(3.0))
+                .w(px(filled))
+                .rounded(px(2.0))
+                .bg(rgb(scene.mark)),
         )
 }
 
-fn raised_arm(color: u32) -> impl IntoElement {
+fn break_scene(scene: &BreakScene) -> impl IntoElement {
+    let glow = scene.glow << 8;
+    div().absolute().inset_0().child(
+        div()
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .h(px(360.0))
+            .bg(linear_gradient(
+                180.0,
+                linear_color_stop(rgba(glow), 0.0),
+                linear_color_stop(rgba(glow | 0x28), 1.0),
+            )),
+    )
+}
+
+fn resting_mark(color: u32, glow: u32) -> impl IntoElement {
+    let head = div()
+        .w(px(44.0))
+        .h(px(44.0))
+        .rounded(px(22.0))
+        .bg(rgb(color));
     div()
-        .w(px(16.0))
-        .h(px(72.0))
-        .rounded(px(8.0))
+        .relative()
+        .w(px(220.0))
+        .h(px(200.0))
+        .child(
+            div()
+                .absolute()
+                .top(px(8.0))
+                .left(px(10.0))
+                .w(px(200.0))
+                .h(px(200.0))
+                .rounded(px(100.0))
+                .bg(rgb(glow))
+                .opacity(0.22),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(6.0))
+                .child(head)
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_end()
+                        .gap(px(6.0))
+                        .child(resting_arm(color))
+                        .child(
+                            div()
+                                .w(px(72.0))
+                                .h(px(52.0))
+                                .rounded(px(26.0))
+                                .bg(rgb(color)),
+                        )
+                        .child(resting_arm(color)),
+                )
+                .child(
+                    div()
+                        .w(px(128.0))
+                        .h(px(36.0))
+                        .rounded(px(18.0))
+                        .bg(rgb(color)),
+                ),
+        )
+        .with_animation(
+            "stand-breathe",
+            Animation::new(Duration::from_millis(5200))
+                .repeat()
+                .with_easing(|t| (t * std::f32::consts::PI).sin()),
+            |mark, phase| mark.mt(px(phase * 6.0)),
+        )
+}
+
+fn resting_arm(color: u32) -> impl IntoElement {
+    div()
+        .w(px(28.0))
+        .h(px(12.0))
+        .rounded(px(6.0))
         .bg(rgb(color))
 }
 
@@ -1111,9 +1314,15 @@ struct Overlay {
 
 impl Render for Overlay {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let remaining = self.stand.read(cx).session.remaining(Instant::now());
-        let label = format_remaining(remaining);
-        let scene = self.stand.read(cx).break_scene_now();
+        let (label, fraction, scene) = {
+            let stand = self.stand.read(cx);
+            let now = Instant::now();
+            (
+                format_remaining(stand.session.remaining(now)),
+                break_fraction(&stand.session, now),
+                stand.break_scene_now(),
+            )
+        };
         div()
             .id("break-surface")
             .track_focus(&self.focus)
@@ -1121,8 +1330,8 @@ impl Render for Overlay {
             .flex()
             .size_full()
             .overflow_hidden()
-            .bg(rgba(scene.veil))
-            .text_color(rgb(PAPER))
+            .bg(rgb(scene.veil))
+            .text_color(rgb(scene.mark))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -1156,15 +1365,14 @@ impl Render for Overlay {
                 }
             }))
             .child(break_scene(scene))
-            .child(
-                div().flex().flex_1().pb(px(120.0)).child(break_copy(
-                    &label,
-                    scene,
-                    false,
-                    "end-break",
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
-                )),
-            )
+            .child(break_copy(
+                &label,
+                fraction,
+                scene,
+                false,
+                "end-break",
+                cx.listener(|this, _: &ClickEvent, _, cx| this.end_break(cx)),
+            ))
             .with_animation(
                 "break-fade",
                 Animation::new(Duration::from_secs(1)),
@@ -1203,25 +1411,8 @@ fn hold_overlay_focus(overlay: &mut Overlay, window: &mut Window, cx: &mut Conte
     cx.stop_propagation();
 }
 
-fn brand_image() -> Arc<Image> {
-    static IMAGE: OnceLock<Arc<Image>> = OnceLock::new();
-    IMAGE
-        .get_or_init(|| {
-            Arc::new(Image {
-                format: ImageFormat::Png,
-                bytes: include_bytes!("../assets/AppIcon.png").to_vec(),
-                id: 1,
-            })
-        })
-        .clone()
-}
-
 fn minutes_label(minutes: u32) -> String {
-    if minutes == 1 {
-        "1 minute".to_string()
-    } else {
-        format!("{minutes} minutes")
-    }
+    format!("{minutes} min")
 }
 
 fn display_targets(cx: &App) -> Vec<(Option<DisplayId>, Size<Pixels>)> {

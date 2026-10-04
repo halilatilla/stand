@@ -7,11 +7,33 @@ use std::sync::Mutex;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuCommand {
     StartBreak,
+    SetWork(u32),
+    SetBreak(u32),
     Settings,
     Quit,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MenuView {
+    pub status: &'static str,
+    pub symbol: &'static str,
+    pub can_start: bool,
+    pub work_minutes: u32,
+    pub break_minutes: u32,
+}
+
+const START: isize = 1;
+const SETTINGS: isize = 2;
+const QUIT: isize = 3;
+const ABOUT: isize = 4;
+const WORK_TAG: isize = 100;
+const BREAK_TAG: isize = 400;
+
+const WORK_PRESETS: &[u32] = &[25, 50, 90];
+const BREAK_PRESETS: &[u32] = &[5, 10, 20];
+
 static PENDING: Mutex<Vec<MenuCommand>> = Mutex::new(Vec::new());
+static SHOWN: Mutex<Option<MenuView>> = Mutex::new(None);
 
 pub fn poll() -> Vec<MenuCommand> {
     PENDING
@@ -25,11 +47,11 @@ pub fn install() {
     install_mac();
 }
 
-pub fn set_title(title: &str) {
+pub fn set_view(view: MenuView) {
     #[cfg(target_os = "macos")]
-    set_title_mac(title);
+    set_view_mac(view);
     #[cfg(not(target_os = "macos"))]
-    let _ = title;
+    let _ = view;
 }
 
 #[cfg(target_os = "macos")]
@@ -58,12 +80,11 @@ fn install_mac() {
         let button: *mut Object = msg_send![item, button];
         if let Ok(mut slot) = STATUS.lock() {
             *slot = StatusSlot {
-                button: button as usize,
-                item: item as usize,
+                menu: menu as usize,
+                target: target as usize,
             };
         }
         install_images(app, button);
-        steady_menu_font(button);
         install_app_menu(app, target);
     }
 
@@ -90,14 +111,20 @@ fn install_mac() {
 
     extern "C" fn menu_action(_this: &objc::runtime::Object, _: Sel, sender: *mut Object) {
         let tag: isize = unsafe { msg_send![sender, tag] };
-        if tag == 4 {
+        if tag == ABOUT {
             show_about();
             return;
         }
         let command = match tag {
-            1 => MenuCommand::StartBreak,
-            2 => MenuCommand::Settings,
-            3 => MenuCommand::Quit,
+            START => MenuCommand::StartBreak,
+            SETTINGS => MenuCommand::Settings,
+            QUIT => MenuCommand::Quit,
+            tag if (WORK_TAG..BREAK_TAG).contains(&tag) => {
+                MenuCommand::SetWork((tag - WORK_TAG) as u32)
+            }
+            tag if (BREAK_TAG..BREAK_TAG + 80).contains(&tag) => {
+                MenuCommand::SetBreak((tag - BREAK_TAG) as u32)
+            }
             _ => return,
         };
         if let Ok(mut pending) = PENDING.lock() {
@@ -108,12 +135,9 @@ fn install_mac() {
     fn status_menu(target: *mut Object) -> *mut Object {
         unsafe {
             let menu: *mut Object = msg_send![class!(NSMenu), new];
-            add_item(menu, target, "About Stand", "", 4);
+            add_item(menu, target, "About Stand", "", ABOUT);
             add_separator(menu);
-            add_item(menu, target, "Start break", "", 1);
-            add_item(menu, target, "Settings…", ",", 2);
-            add_separator(menu);
-            add_item(menu, target, "Quit Stand", "q", 3);
+            add_item(menu, target, "Quit Stand", "q", QUIT);
             menu
         }
     }
@@ -125,34 +149,11 @@ fn install_mac() {
             let _: () = msg_send![main, addItem: app_item];
             let submenu: *mut Object = msg_send![class!(NSMenu), new];
             let _: () = msg_send![submenu, setTitle: ns_string("Stand")];
-            add_item(submenu, target, "About Stand", "", 4);
+            add_item(submenu, target, "About Stand", "", ABOUT);
             add_separator(submenu);
-            add_item(submenu, target, "Settings…", ",", 2);
-            add_separator(submenu);
-            add_item(submenu, target, "Quit Stand", "q", 3);
+            add_item(submenu, target, "Quit Stand", "q", QUIT);
             let _: () = msg_send![app_item, setSubmenu: submenu];
             let _: () = msg_send![app, setMainMenu: main];
-        }
-    }
-
-    fn add_separator(menu: *mut Object) {
-        unsafe {
-            let separator: *mut Object = msg_send![class!(NSMenuItem), separatorItem];
-            let _: () = msg_send![menu, addItem: separator];
-        }
-    }
-
-    fn add_item(menu: *mut Object, target: *mut Object, title: &str, key: &str, tag: isize) {
-        unsafe {
-            let item: *mut Object = msg_send![class!(NSMenuItem), alloc];
-            let item: *mut Object = msg_send![item, initWithTitle: ns_string(title) action: sel!(standMenu:) keyEquivalent: ns_string(key)];
-            let _: () = msg_send![item, setTarget: target];
-            let _: () = msg_send![item, setTag: tag];
-            if !key.is_empty() {
-                // NSEventModifierFlagCommand
-                let _: () = msg_send![item, setKeyEquivalentModifierMask: 1usize << 20];
-            }
-            let _: () = msg_send![menu, addItem: item];
         }
     }
 
@@ -163,24 +164,13 @@ fn install_mac() {
                 let _: () = msg_send![mark, setTemplate: YES];
                 let _: () = msg_send![mark, setSize: NsSize { width: 18.0, height: 18.0 }];
                 let _: () = msg_send![button, setImage: mark];
-                // NSImageLeft: the countdown stays beside the mark.
-                let _: () = msg_send![button, setImagePosition: 2isize];
+                // NSImageOnly: the menu bar is the icon.
+                let _: () = msg_send![button, setImagePosition: 1isize];
             }
             let icon = ns_image(include_bytes!("../assets/AppIcon.png"));
             if !icon.is_null() {
                 let _: () = msg_send![app, setApplicationIconImage: icon];
             }
-        }
-    }
-
-    fn show_about() {
-        use objc::runtime::{Object, YES};
-        use objc::{class, msg_send, sel, sel_impl};
-        unsafe {
-            let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-            let _: () = msg_send![app, activateIgnoringOtherApps: YES];
-            let _: *mut Object =
-                msg_send![app, orderFrontStandardAboutPanel: std::ptr::null::<Object>()];
         }
     }
 }
@@ -194,47 +184,237 @@ struct NsSize {
 
 #[cfg(target_os = "macos")]
 struct StatusSlot {
-    button: usize,
-    item: usize,
+    menu: usize,
+    target: usize,
 }
 
 #[cfg(target_os = "macos")]
-static STATUS: Mutex<StatusSlot> = Mutex::new(StatusSlot { button: 0, item: 0 });
+static STATUS: Mutex<StatusSlot> = Mutex::new(StatusSlot { menu: 0, target: 0 });
 
 #[cfg(target_os = "macos")]
-fn steady_menu_font(button: *mut objc::runtime::Object) {
+fn set_view_mac(view: MenuView) {
+    use objc::runtime::Object;
     use objc::{class, msg_send, sel, sel_impl};
-    if button.is_null() {
+
+    if SHOWN.lock().ok().and_then(|shown| *shown) == Some(view) {
+        return;
+    }
+    let Ok(slot) = STATUS.lock() else {
+        return;
+    };
+    let menu = slot.menu as *mut Object;
+    let target = slot.target as *mut Object;
+    if menu.is_null() || target.is_null() {
         return;
     }
     unsafe {
-        let current: *mut objc::runtime::Object = msg_send![button, font];
-        let size: f64 = if current.is_null() {
-            0.0
-        } else {
-            msg_send![current, pointSize]
-        };
-        let font: *mut objc::runtime::Object = msg_send![class!(NSFont), monospacedDigitSystemFontOfSize: size weight: 0.0f64];
-        if !font.is_null() {
-            let _: () = msg_send![button, setFont: font];
+        let _: () = msg_send![menu, removeAllItems];
+        add_heading(menu, "Now");
+        add_label(menu, view.status, view.symbol);
+        add_separator(menu);
+        let start = add_item(menu, target, "Start break", "", START);
+        set_symbol(start, "figure.stand");
+        if !view.can_start {
+            let _: () = msg_send![start, setEnabled: false];
+        }
+        add_separator(menu);
+        add_heading(menu, "Schedule");
+        let work = add_item(
+            menu,
+            target,
+            &format!("Work, {} min", view.work_minutes),
+            "",
+            0,
+        );
+        let _: () = msg_send![work, setAction: std::ptr::null::<objc::runtime::Sel>()];
+        set_symbol(work, "clock");
+        let work_menu: *mut Object = msg_send![class!(NSMenu), new];
+        add_choices(
+            work_menu,
+            target,
+            choices(view.work_minutes, WORK_PRESETS),
+            view.work_minutes,
+            WORK_TAG,
+        );
+        let _: () = msg_send![work, setSubmenu: work_menu];
+        let rest = add_item(
+            menu,
+            target,
+            &format!("Break, {} min", view.break_minutes),
+            "",
+            0,
+        );
+        let _: () = msg_send![rest, setAction: std::ptr::null::<objc::runtime::Sel>()];
+        set_symbol(rest, "hourglass");
+        let rest_menu: *mut Object = msg_send![class!(NSMenu), new];
+        add_choices(
+            rest_menu,
+            target,
+            choices(view.break_minutes, BREAK_PRESETS),
+            view.break_minutes,
+            BREAK_TAG,
+        );
+        let _: () = msg_send![rest, setSubmenu: rest_menu];
+        let minutes = add_item(menu, target, "Minutes…", ",", SETTINGS);
+        set_symbol(minutes, "slider.horizontal.3");
+        if !view.can_start {
+            let _: () = msg_send![minutes, setEnabled: false];
+        }
+        add_separator(menu);
+        add_item(menu, target, "About Stand", "", ABOUT);
+        add_item(menu, target, "Quit Stand", "q", QUIT);
+    }
+    if let Ok(mut shown) = SHOWN.lock() {
+        *shown = Some(view);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn choices(current: u32, presets: &[u32]) -> Vec<u32> {
+    let mut values = presets.to_vec();
+    if !values.contains(&current) {
+        values.push(current);
+    }
+    values.sort_unstable();
+    values
+}
+
+#[cfg(target_os = "macos")]
+fn add_choices(
+    menu: *mut objc::runtime::Object,
+    target: *mut objc::runtime::Object,
+    values: Vec<u32>,
+    current: u32,
+    base: isize,
+) {
+    use objc::{msg_send, sel, sel_impl};
+
+    for minutes in values {
+        let item = add_item(
+            menu,
+            target,
+            &format!("{minutes} min"),
+            "",
+            base + minutes as isize,
+        );
+        if minutes == current {
+            // NSControlStateValueOn
+            unsafe {
+                let _: () = msg_send![item, setState: 1isize];
+            }
         }
     }
 }
 
-fn set_title_mac(title: &str) {
+#[cfg(target_os = "macos")]
+fn add_separator(menu: *mut objc::runtime::Object) {
     use objc::runtime::Object;
-    use objc::{msg_send, sel, sel_impl};
+    use objc::{class, msg_send, sel, sel_impl};
 
-    let Ok(slot) = STATUS.lock() else {
-        return;
-    };
-    let button = slot.button as *mut Object;
-    let _kept = slot.item;
-    if button.is_null() {
-        return;
-    }
     unsafe {
-        let _: () = msg_send![button, setTitle: ns_string(title)];
+        let separator: *mut Object = msg_send![class!(NSMenuItem), separatorItem];
+        let _: () = msg_send![menu, addItem: separator];
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn add_heading(menu: *mut objc::runtime::Object, title: &str) {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        let kind = class!(NSMenuItem);
+        let header = sel!(sectionHeaderWithTitle:);
+        let available: bool = msg_send![kind, respondsToSelector: header];
+        let item: *mut Object = if available {
+            msg_send![kind, sectionHeaderWithTitle: ns_string(title)]
+        } else {
+            let item: *mut Object = msg_send![kind, alloc];
+            let item: *mut Object = msg_send![item, init];
+            let _: () = msg_send![item, setTitle: ns_string(title)];
+            let _: () = msg_send![item, setEnabled: false];
+            item
+        };
+        let _: () = msg_send![menu, addItem: item];
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn add_label(menu: *mut objc::runtime::Object, title: &str, symbol: &str) {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        let item: *mut Object = msg_send![class!(NSMenuItem), alloc];
+        let item: *mut Object = msg_send![item, init];
+        let _: () = msg_send![item, setTitle: ns_string(title)];
+        set_symbol(item, symbol);
+        let _: () = msg_send![item, setEnabled: false];
+        let _: () = msg_send![menu, addItem: item];
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_symbol(item: *mut objc::runtime::Object, name: &str) {
+    use objc::runtime::{Object, YES};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        let image: *mut Object = msg_send![class!(NSImage), imageWithSystemSymbolName: ns_string(name) accessibilityDescription: std::ptr::null::<Object>()];
+        if image.is_null() {
+            return;
+        }
+        let _: () = msg_send![image, setTemplate: YES];
+        let _: () = msg_send![item, setImage: image];
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn add_item(
+    menu: *mut objc::runtime::Object,
+    target: *mut objc::runtime::Object,
+    title: &str,
+    key: &str,
+    tag: isize,
+) -> *mut objc::runtime::Object {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        let item: *mut Object = msg_send![class!(NSMenuItem), alloc];
+        let item: *mut Object = msg_send![item, initWithTitle: ns_string(title) action: sel!(standMenu:) keyEquivalent: ns_string(key)];
+        let _: () = msg_send![item, setTarget: target];
+        let _: () = msg_send![item, setTag: tag];
+        if !key.is_empty() {
+            // NSEventModifierFlagCommand
+            let _: () = msg_send![item, setKeyEquivalentModifierMask: 1usize << 20];
+        }
+        let _: () = msg_send![menu, addItem: item];
+        item
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn show_about() {
+    use objc::runtime::{Object, YES};
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![app, activateIgnoringOtherApps: YES];
+        let options: *mut Object = msg_send![class!(NSMutableDictionary), dictionary];
+        let _: () = msg_send![options, setObject: ns_string("Stand") forKey: ns_string("ApplicationName")];
+        let _: () = msg_send![options, setObject: ns_string(env!("CARGO_PKG_VERSION")) forKey: ns_string("ApplicationVersion")];
+        let _: () = msg_send![options, setObject: ns_string("Licensed under the Apache License, Version 2.0.") forKey: ns_string("Copyright")];
+        let credits: *mut Object = msg_send![class!(NSAttributedString), alloc];
+        let credits: *mut Object = msg_send![credits, initWithString: ns_string(env!("CARGO_PKG_DESCRIPTION"))];
+        if !credits.is_null() {
+            let _: () = msg_send![options, setObject: credits forKey: ns_string("Credits")];
+        }
+        let icon = ns_image(include_bytes!("../assets/AppIcon.png"));
+        if !icon.is_null() {
+            let _: () = msg_send![options, setObject: icon forKey: ns_string("ApplicationIcon")];
+        }
+        let _: *mut Object = msg_send![app, orderFrontStandardAboutPanelWithOptions: options];
     }
 }
 
@@ -244,7 +424,8 @@ fn ns_image(bytes: &[u8]) -> *mut objc::runtime::Object {
     use objc::{class, msg_send, sel, sel_impl};
 
     unsafe {
-        let data: *mut Object = msg_send![class!(NSData), dataWithBytes: bytes.as_ptr() length: bytes.len()];
+        let data: *mut Object =
+            msg_send![class!(NSData), dataWithBytes: bytes.as_ptr() length: bytes.len()];
         if data.is_null() {
             return std::ptr::null_mut();
         }

@@ -2,7 +2,9 @@
 
 Stand is a break timer for long coding sessions. On a Mac it lives in the menu bar. A warning appears 30 seconds before the screen is covered. A call or a fullscreen window pauses the work clock. Time you were already away, for at least as long as the break, counts as that break. There is no snooze. **End break** on the break screen stops it immediately.
 
-The defaults are 50 minutes of work and a 5 minute break. Both can be changed in the window:
+The defaults are 50 minutes of work and a 5 minute break. The menu is the control. **Now** names the clock. **Start break** starts one without waiting. **Work** and **Break** are one row each, and the lengths sit in that row. **Minutes…** opens the window when the length is not one of those.
+
+The window follows the Mac’s appearance. The countdown leads, **Schedule** is one group, and **Start break** is the filled button. Both lengths can also be changed there:
 
 - Work interval: 1–180 minutes
 - Break length: 1–30 minutes
@@ -13,7 +15,7 @@ Settings are written as JSON when you change them.
 - Linux: `$XDG_CONFIG_HOME/stand/settings.json`, or `~/.config/stand/settings.json`
 - `STAND_CONFIG_DIR` overrides that directory
 
-**Start break** in the window or the menu bar starts a break without waiting out the work interval. Closing the settings window on a Mac leaves Stand running. Quit is in the menu bar.
+**Start break** in the menu or the window starts a break without waiting out the work interval. Closing the settings window on a Mac leaves Stand running. **About Stand** sits with **Quit Stand**.
 
 ## Why this is not the macOS login lock
 
@@ -21,7 +23,7 @@ The login lock (`CGSession -suspend`, or the Fast User Switching lock) is owned 
 
 A break is an app window:
 
-- a cover you can see through, with one color and one line kept for the whole break
+- a solid warm cover, so the desktop stays hidden: a seated figure, one quiet line kept for the whole break, a small clock, and End break at the bottom
 - one borderless window per display
 - on macOS, GPUI simple fullscreen (covers the menu bar and notch, and does not create a new Space), then the window is raised to the highest window level, pinned to every Space, and made key so it keeps the keyboard
 - the window refuses to close until the break ends

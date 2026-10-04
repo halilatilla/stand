@@ -33,6 +33,50 @@ enum Phase {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Activity {
+    Working,
+    Paused,
+    Away,
+    BreakSoon,
+    OnBreak,
+}
+
+impl Activity {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Working => "Working",
+            Self::Paused => "Paused",
+            Self::Away => "Away",
+            Self::BreakSoon => "Break soon",
+            Self::OnBreak => "On a break",
+        }
+    }
+
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::Working => "Next break",
+            Self::Paused => "Paused for a call or a fullscreen window",
+            Self::Away => "Away long enough to count as the break",
+            Self::BreakSoon => "The screen covers at zero",
+            Self::OnBreak => "The cover is up",
+        }
+    }
+
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Working | Self::BreakSoon => "timer",
+            Self::Paused => "pause.circle",
+            Self::Away => "figure.walk",
+            Self::OnBreak => "figure.stand",
+        }
+    }
+
+    pub fn counting(self) -> bool {
+        matches!(self, Self::Working | Self::BreakSoon)
+    }
+}
+
 /// Work interval and enforced break. Time is injected so tests do not sleep.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
@@ -85,6 +129,20 @@ impl Session {
         self.away
     }
 
+    pub fn activity(&self, now: Instant) -> Activity {
+        if self.is_break() {
+            Activity::OnBreak
+        } else if self.away {
+            Activity::Away
+        } else if self.is_held() {
+            Activity::Paused
+        } else if self.is_warning(now) {
+            Activity::BreakSoon
+        } else {
+            Activity::Working
+        }
+    }
+
     /// The last `WARNING_LEAD` of a work interval, while the person is still here.
     pub fn is_warning(&self, now: Instant) -> bool {
         if self.is_break() || self.away || self.is_held() {
@@ -92,18 +150,6 @@ impl Session {
         }
         let left = self.remaining(now);
         !left.is_zero() && left <= WARNING_LEAD
-    }
-
-    pub fn status_label(&self, now: Instant) -> String {
-        if self.is_break() {
-            format!("Break {}", format_remaining(self.remaining(now)))
-        } else if self.away {
-            "Away".to_string()
-        } else if self.is_warning(now) {
-            format!("Break in {}", format_remaining(self.remaining(now)))
-        } else {
-            format_remaining(self.remaining(now))
-        }
     }
 
     pub fn set_work_interval_minutes(&mut self, minutes: u32) {
@@ -289,13 +335,7 @@ impl Session {
     }
 
     fn is_held(&self) -> bool {
-        matches!(
-            self.phase,
-            Phase::Working {
-                held: Some(_),
-                ..
-            }
-        )
+        matches!(self.phase, Phase::Working { held: Some(_), .. })
     }
 
     fn begin_work(&mut self, now: Instant) {
@@ -531,6 +571,25 @@ mod tests {
     }
 
     #[test]
+    fn activity_names_each_clock_state() {
+        let start = Instant::now();
+        let mut session =
+            Session::working_for(Duration::from_secs(40), Duration::from_secs(5), start);
+        assert_eq!(session.activity(start), Activity::Working);
+        session.set_held(true, start);
+        assert_eq!(session.activity(start), Activity::Paused);
+        session.set_held(false, start);
+        assert_eq!(
+            session.activity(start + Duration::from_secs(20)),
+            Activity::BreakSoon
+        );
+        session.lock_now(start);
+        assert_eq!(session.activity(start), Activity::OnBreak);
+        let mut away = Session::working_for(Duration::from_secs(60), Duration::from_secs(5), start);
+        away.tick_with_idle(start, Duration::from_secs(5));
+        assert_eq!(away.activity(start), Activity::Away);
+    }
+
     fn format_remaining_pads_minutes_and_adds_hours() {
         assert_eq!(format_remaining(Duration::from_secs(5)), "00:05");
         assert_eq!(format_remaining(Duration::from_secs(65)), "01:05");

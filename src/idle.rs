@@ -50,7 +50,10 @@ const ANY_INPUT: u32 = u32::MAX;
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
-    fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *mut objc::runtime::Object;
+    fn CGWindowListCopyWindowInfo(
+        option: u32,
+        relative_to_window: u32,
+    ) -> *mut objc::runtime::Object;
     fn CGGetActiveDisplayList(
         max_displays: u32,
         active_displays: *mut u32,
@@ -71,8 +74,7 @@ const ON_SCREEN_EXCEPT_DESKTOP: u32 = 1 | 16;
 fn frontmost_is_call() -> bool {
     use objc::{class, msg_send, sel, sel_impl};
     unsafe {
-        let workspace: *mut objc::runtime::Object =
-            msg_send![class!(NSWorkspace), sharedWorkspace];
+        let workspace: *mut objc::runtime::Object = msg_send![class!(NSWorkspace), sharedWorkspace];
         if workspace.is_null() {
             return false;
         }
@@ -127,7 +129,8 @@ fn windows_are_busy() -> bool {
 fn meeting_window(owner: &str, name: &str) -> bool {
     let owner = owner.to_ascii_lowercase();
     let name = name.to_ascii_lowercase();
-    (owner.contains("zoom") && (name.contains("meeting") || name.contains("webinar") || name.contains("sharing")))
+    (owner.contains("zoom")
+        && (name.contains("meeting") || name.contains("webinar") || name.contains("sharing")))
         || (owner.contains("teams") && (name.contains("meeting") || name.contains("call")))
         || (owner.contains("webex") && name.contains("meeting"))
         || (owner.contains("slack") && name.contains("huddle"))
