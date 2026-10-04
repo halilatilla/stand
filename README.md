@@ -1,59 +1,112 @@
-# Stand
+<p align="center">
+  <img src="assets/AppIcon.png" width="112" alt="Stand">
+</p>
 
-Stand is a break timer for long coding sessions. On a Mac it lives in the menu bar. A warning appears 30 seconds before the screen is covered. A call or a fullscreen window pauses the work clock. Time you were already away, for at least as long as the break, counts as that break. There is no snooze. **End break** on the break screen stops it immediately.
+<h1 align="center">Stand</h1>
 
-The defaults are 50 minutes of work and a 5 minute break. The menu is the control. **Now** names the clock. **Start break** starts one without waiting. **Work** and **Break** are one row each, and the lengths sit in that row. **Minutes…** opens the window when the length is not one of those.
+<p align="center">
+  A break timer for long sessions at the Mac.<br>
+  It lives in the menu bar. When the time is up, the screen becomes a quiet room until you have rested.
+</p>
 
-The window follows the Mac’s appearance. The countdown leads, **Schedule** is one group, and **Start break** is the filled button. Both lengths can also be changed there:
+<p align="center">
+  <a href="https://github.com/halilatilla/stand/releases/latest"><strong>Download for Mac</strong></a>
+</p>
 
-- Work interval: 1–180 minutes
-- Break length: 1–30 minutes
+The menu is how you run it. The window is where you set the minutes. The break covers the desktop, so nothing on it can pull you back.
 
-Settings are written as JSON when you change them.
+<p align="center">
+  <img src="docs/menu.png" width="220" alt="The menu: Working, Start break, Work 50 min, Break 5 min">
+  &nbsp;&nbsp;&nbsp;
+  <img src="docs/window.png" width="280" alt="The window: 49:46 until the next break, with the schedule">
+</p>
 
-- macOS: `~/Library/Application Support/Stand/settings.json`
-- Linux: `$XDG_CONFIG_HOME/stand/settings.json`, or `~/.config/stand/settings.json`
-- `STAND_CONFIG_DIR` overrides that directory
+<p align="center">
+  <img src="docs/break.png" width="720" alt="A break: a seated figure, Stay. The work can wait, and a small clock">
+</p>
 
-**Start break** in the menu or the window starts a break without waiting out the work interval. Closing the settings window on a Mac leaves Stand running. **About Stand** sits with **Quit Stand**.
+<p align="center">
+  <em>The menu. The window. A break.</em>
+</p>
 
-## Why this is not the macOS login lock
+## A normal session
 
-The login lock (`CGSession -suspend`, or the Fast User Switching lock) is owned by macOS. An app can ask for it, but it cannot unlock it on a timer. Stand therefore does not call it.
+You work. Stand counts in the background. The menu bar shows only the icon.
 
-A break is an app window:
+Thirty seconds before a break, a small warning appears. Then the screen is covered. You see a seated figure, one quiet line, and a small clock. That line stays for the whole break.
 
-- a solid warm cover, so the desktop stays hidden: a seated figure, one quiet line kept for the whole break, a small clock, and End break at the bottom
-- one borderless window per display
-- on macOS, GPUI simple fullscreen (covers the menu bar and notch, and does not create a new Space), then the window is raised to the highest window level, pinned to every Space, and made key so it keeps the keyboard
-- the window refuses to close until the break ends
-- the work interval starts again when the break ends
+**End break** stops it. Holding Escape for 3 seconds does the same. There is no snooze.
 
-**End break** ends the break immediately. Holding Escape for 3 seconds does the same.
+A call, or a fullscreen window, pauses the work clock. If you were already away for at least as long as the break, that time counts as the break.
 
-## Build and run on a Mac
+Stand covers the screen with its own window. The Mac login lock stays with macOS, and an app cannot unlock it on a timer.
 
-Stand tracks the GPUI revision Zed is shipping. That currently means Rust 1.98.1 (see `rust-toolchain.toml`). Install [Xcode](https://developer.apple.com/xcode/) and the command line tools, then:
+## The menu
+
+Click the icon.
+
+- **Now** says what is happening: Working, Paused, Away, Break soon, or On a break.
+- **Start break** starts one immediately.
+- **Work** and **Break** each open a short list. Work is 25, 50, or 90 minutes. Break is 5, 10, or 20.
+- **Minutes…** opens the window when you want a different number. Command-comma does the same.
+- **About Stand** and **Quit Stand** are at the bottom.
+
+## The window
+
+It follows light and dark.
+
+The countdown is at the top. Under **Schedule**, click the minutes to type them, or use **−5** and **+5**. **Start break** is the filled button.
+
+Work can be from 1 to 180 minutes. A break can be from 1 to 30. The defaults are 50 and 5.
+
+Closing the window leaves Stand running in the menu bar.
+
+## Install
+
+This build is for Apple silicon (M1 or later) on macOS 11 or later.
+
+1. Download the zip from the [latest release](https://github.com/halilatilla/stand/releases/latest).
+2. Unzip it and move **Stand** to Applications. Replace the copy that is already there.
+3. Open it. macOS will say it could not verify the app. Click **Done**.
+4. Open **System Settings → Privacy & Security**, scroll to Security, and click **Open Anyway**.
+5. Open Stand again. It appears in the menu bar.
+
+Quit the old Stand from its menu before opening the new one.
+
+If **Open Anyway** is not there:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Stand.app
+```
+
+## Build it yourself
+
+You need [Xcode](https://developer.apple.com/xcode/) and Rust 1.98.1 (see `rust-toolchain.toml`).
 
 ```sh
 xcode-select --install
 cargo run --release
 ```
 
-GPUI renders with Metal. The first build compiles GPUI from the Zed repository (`gpui` and `gpui_platform`). `gpui_platform` is the crate the [GPUI readme](https://gpui.rs/) tells you to depend on, and it is not published on crates.io, so the dependency is the Zed git crate pinned in `Cargo.toml`. This repo does not fork Zed.
-
-Closing the Stand window on Linux quits the app. On a Mac it leaves Stand in the menu bar. During a break the window will not close.
+Stand is drawn with GPUI, the UI crate from [Zed](https://github.com/zed-industries/zed). That crate is not on crates.io, so `Cargo.toml` points at one Zed revision. This repo does not fork Zed.
 
 ## Linux
 
-The settings window and the break countdown can run on Linux. Wayland uses a layer-shell overlay that takes exclusive keyboard focus. If the compositor has no layer shell, Stand falls back to a fullscreen window. That window follows the window manager, so a desktop panel can stay visible. Either way, the countdown ends when the timer reaches zero, or when **End break** is clicked. Holding Escape for 3 seconds also ends it.
-
-Window level, simple fullscreen, and a real multi-display layout are macOS behavior and were not verified here.
-
-Linux builds need a GPU driver (or lavapipe), `pkg-config`, and the Wayland/X11 libraries GPUI links:
+The window and the break can run on Linux. On Wayland, a compositor with layer shell covers the screen and takes the keyboard. Without that, Stand uses a normal fullscreen window, and a panel can stay visible.
 
 ```sh
 sudo apt install pkg-config libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
   libvulkan-dev libxcb1-dev libx11-dev libfontconfig1-dev cmake clang
 cargo run --release
 ```
+
+Closing the window on Linux quits the app.
+
+## Where the minutes are saved
+
+Stand writes them when you change them.
+
+- Mac: `~/Library/Application Support/Stand/settings.json`
+- Linux: `$XDG_CONFIG_HOME/stand/settings.json`, or `~/.config/stand/settings.json`
+
+`STAND_CONFIG_DIR` overrides that folder.
