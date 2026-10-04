@@ -63,6 +63,7 @@ fn install_mac() {
             };
         }
         install_images(app, button);
+        steady_menu_font(button);
         install_app_menu(app, target);
     }
 
@@ -201,6 +202,25 @@ struct StatusSlot {
 static STATUS: Mutex<StatusSlot> = Mutex::new(StatusSlot { button: 0, item: 0 });
 
 #[cfg(target_os = "macos")]
+fn steady_menu_font(button: *mut objc::runtime::Object) {
+    use objc::{class, msg_send, sel, sel_impl};
+    if button.is_null() {
+        return;
+    }
+    unsafe {
+        let current: *mut objc::runtime::Object = msg_send![button, font];
+        let size: f64 = if current.is_null() {
+            0.0
+        } else {
+            msg_send![current, pointSize]
+        };
+        let font: *mut objc::runtime::Object = msg_send![class!(NSFont), monospacedDigitSystemFontOfSize: size weight: 0.0f64];
+        if !font.is_null() {
+            let _: () = msg_send![button, setFont: font];
+        }
+    }
+}
+
 fn set_title_mac(title: &str) {
     use objc::runtime::Object;
     use objc::{msg_send, sel, sel_impl};

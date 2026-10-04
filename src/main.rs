@@ -10,7 +10,8 @@ use std::sync::{Arc, OnceLock};
 
 use gpui::{
     Animation, AnimationExt, App, Bounds, ClickEvent, Context, DisplayId, Entity, FocusHandle,
-    FontWeight, Global, Image, ImageFormat, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
+    FontFeatures, FontWeight, Global, Image, ImageFormat, KeyDownEvent, KeyUpEvent, MouseButton,
+    MouseDownEvent,
     Pixels, Size, Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
     WindowDecorations, WindowHandle, WindowKind, WindowOptions, div, img, linear_color_stop,
     linear_gradient, point, prelude::*, px, rgb, rgba, size,
@@ -503,6 +504,7 @@ impl Render for Warning {
                 div()
                     .text_size(px(22.0))
                     .font_weight(FontWeight::BOLD)
+                    .font_features(clock_features())
                     .child(format!("Break in {}", format_remaining(left))),
             )
             .child(
@@ -730,6 +732,8 @@ fn settings_body(
                             div()
                                 .text_size(px(36.0))
                                 .font_weight(FontWeight::BOLD)
+                                .font_features(clock_features())
+                                .whitespace_nowrap()
                                 .child(remaining.to_string()),
                         ),
                 ),
@@ -944,6 +948,10 @@ fn step_button(
     button.on_click(on_click)
 }
 
+fn clock_features() -> FontFeatures {
+    FontFeatures(Arc::new(vec![("tnum".into(), 1)]))
+}
+
 fn break_copy(
     remaining: &str,
     scene: &BreakScene,
@@ -977,6 +985,7 @@ fn break_copy(
             div()
                 .text_size(clock)
                 .font_weight(FontWeight::BOLD)
+                .font_features(clock_features())
                 .whitespace_nowrap()
                 .child(remaining.to_string()),
         )
